@@ -222,6 +222,70 @@ bool try_acquire_npu(job_t* job) {
 }
 ```
 
+### Dynamic Dispatch (No Fixed Pinning)
+```c
+// Compute affinity dynamically at dispatch time
+iree_task_affinity_set_t compute_dynamic_affinity(
+    scheduler_t* scheduler, dispatch_t* dispatch) {
+  
+  // Get current utilization
+  float util0 = get_cluster_utilization(scheduler, 0);
+  float util1 = get_cluster_utilization(scheduler, 1);
+  
+  if (dispatch->needs_npu) {
+    return is_npu_available(scheduler) ? 
+        scheduler->cluster1_mask : 0;  // Queue if busy
+  }
+  
+  // Dynamic selection: prefer less loaded
+  if (util0 < util1 * 0.7f) {
+    return scheduler->cluster0_mask;  // Cores 0-3
+  } else if (util1 < 0.8f && !npu_in_use(scheduler)) {
+    return scheduler->cluster1_mask;  // Cores 4-7
+  }
+  
+  return (util0 <= util1) ? 
+      scheduler->cluster0_mask : scheduler->cluster1_mask;
+}
+
+// Apply dynamically in scheduling loop
+while (job = get_next_ready_job(scheduler)) {
+  iree_task_affinity_set_t affinity = 
+      compute_dynamic_affinity(scheduler, job);
+  
+  if (affinity != 0) {
+    job->task->affinity_set = affinity;  // DYNAMIC!
+    submit_task(scheduler, job);
+  } else {
+    requeue_for_later(scheduler, job);
+  }
+}
+```
+
+### Fine-Grained Per-Core Selection
+```c
+// Select N least-loaded cores (not fixed clusters)
+iree_task_affinity_set_t select_least_loaded_cores(
+    scheduler_t* scheduler, uint32_t num_cores) {
+  
+  uint32_t load[8];  // Load per core
+  for (int i = 0; i < 8; i++) {
+    load[i] = get_core_load(scheduler, i);
+  }
+  
+  // Sort by load
+  uint32_t sorted[8];
+  sort_cores_by_load(sorted, load);
+  
+  // Build mask with N least-loaded
+  iree_task_affinity_set_t mask = 0;
+  for (int i = 0; i < num_cores; i++) {
+    mask |= (1ULL << sorted[i]);
+  }
+  return mask;  // e.g., 0b10010101 - not aligned to clusters!
+}
+```
+
 ### Load Balancing Across Clusters
 ```c
 uint32_t choose_cluster(job_t* job) {

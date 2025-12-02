@@ -566,6 +566,252 @@ For your specific use case (4 cores per cluster, 2 clusters, 1 with NPU), here's
    - Modify task submission to read and apply annotations
    - Simpler but less dynamic
 
+### Dynamic Dispatch: Fine-Grained Per-Kernel Scheduling
+
+Instead of statically pinning workloads to fixed core sets, you can implement **dynamic dispatch** where each dispatch/kernel is assigned to cores at runtime based on current system state. This provides maximum flexibility and avoids reserving cores exclusively.
+
+#### Key Concept: Dynamic Affinity Assignment
+
+Rather than setting `task->affinity_set = 0b11110000` (fixed to cores 4-7), the scheduler dynamically computes affinity per-dispatch:
+
+```c
+// Dynamic affinity computation at dispatch time
+iree_task_affinity_set_t compute_dynamic_affinity(
+    scheduler_t* scheduler,
+    dispatch_t* dispatch) {
+  
+  // Analyze dispatch characteristics
+  bool needs_npu = dispatch_requires_npu(dispatch);
+  uint32_t compute_intensity = estimate_compute_intensity(dispatch);
+  
+  // Check current cluster utilization
+  float cluster0_util = get_cluster_utilization(scheduler, 0);
+  float cluster1_util = get_cluster_utilization(scheduler, 1);
+  
+  if (needs_npu) {
+    // NPU required - can only use cluster 1
+    if (is_npu_available(scheduler)) {
+      return scheduler->clusters[1].core_mask;  // 0b11110000
+    } else {
+      // NPU busy - queue for later
+      return 0;  // Will be rescheduled
+    }
+  }
+  
+  // General compute - choose dynamically
+  if (cluster0_util < cluster1_util * 0.7) {
+    // Cluster 0 less loaded - use it
+    return scheduler->clusters[0].core_mask;  // 0b00001111
+  } else if (cluster1_util < 0.5 && !npu_in_use(scheduler)) {
+    // Cluster 1 available and NPU not in use
+    return scheduler->clusters[1].core_mask;  // 0b11110000
+  } else {
+    // Balance across both clusters
+    return select_least_loaded_cores(scheduler, 4);
+  }
+}
+```
+
+#### Per-Dispatch Granularity
+
+To achieve high granularity (different cores per dispatch), intercept at the dispatch level:
+
+```c
+iree_status_t custom_device_queue_execute(
+    iree_hal_device_t* base_device,
+    iree_hal_command_buffer_t* command_buffer,
+    ...) {
+  
+  custom_device_t* device = (custom_device_t*)base_device;
+  
+  // Iterate through all dispatches in command buffer
+  for (each dispatch in command_buffer) {
+    
+    // Analyze this specific dispatch
+    dispatch_characteristics_t chars = analyze_dispatch(dispatch);
+    
+    // Compute affinity dynamically based on:
+    // - Current cluster load
+    // - Dispatch compute characteristics
+    // - Resource availability (NPU, memory bandwidth)
+    // - Thermal state
+    iree_task_affinity_set_t affinity = 
+        compute_dynamic_affinity(&device->scheduler, &chars);
+    
+    // If no cores available, queue for later
+    if (affinity == 0) {
+      enqueue_for_rescheduling(&device->scheduler, dispatch);
+      continue;
+    }
+    
+    // Set affinity on the task
+    iree_task_dispatch_t* task = create_dispatch_task(dispatch);
+    task->header.affinity_set = affinity;  // Dynamic assignment!
+    
+    // Submit to executor
+    submit_task(&device->scheduler, task);
+  }
+  
+  return iree_ok_status();
+}
+```
+
+#### Fine-Grained Core Selection
+
+For even finer granularity, select individual cores within a cluster:
+
+```c
+// Select N least-loaded cores from available set
+iree_task_affinity_set_t select_least_loaded_cores(
+    scheduler_t* scheduler,
+    uint32_t num_cores) {
+  
+  // Get per-core load
+  uint32_t load[8];  // 8 cores total
+  for (int i = 0; i < 8; i++) {
+    load[i] = get_core_load(scheduler, i);
+  }
+  
+  // Sort cores by load (ascending)
+  uint32_t sorted_cores[8];
+  sort_by_load(sorted_cores, load, 8);
+  
+  // Build affinity mask with N least-loaded cores
+  iree_task_affinity_set_t affinity = 0;
+  for (int i = 0; i < num_cores && i < 8; i++) {
+    affinity |= (1ULL << sorted_cores[i]);
+  }
+  
+  return affinity;
+}
+```
+
+#### Dispatch Sharding with Dynamic Distribution
+
+IREE's dispatch sharding mechanism can be leveraged for dynamic distribution:
+
+```c
+// Custom dispatch shard distribution
+void distribute_dispatch_shards_dynamically(
+    iree_task_executor_t* executor,
+    iree_task_dispatch_t* dispatch,
+    scheduler_state_t* state) {
+  
+  // Determine how many shards (tiles) this dispatch has
+  uint32_t total_tiles = dispatch->workgroup_count.x * 
+                         dispatch->workgroup_count.y * 
+                         dispatch->workgroup_count.z;
+  
+  // Get currently available cores (not fixed!)
+  iree_task_affinity_set_t available_cores = 
+      get_available_cores_now(state);
+  
+  uint32_t num_workers = count_bits(available_cores);
+  
+  // Create shards - each shard gets a subset of tiles
+  for (uint32_t i = 0; i < num_workers; i++) {
+    iree_task_dispatch_shard_t* shard = create_shard(dispatch);
+    
+    // Assign shard to specific available worker
+    uint32_t worker_id = get_nth_set_bit(available_cores, i);
+    shard->header.affinity_set = (1ULL << worker_id);
+    
+    // Shard will steal tiles from dispatch's tile pool
+    submit_shard(executor, shard);
+  }
+}
+```
+
+#### Work Stealing as Dynamic Rebalancing
+
+IREE's work-stealing already provides dynamic rebalancing. Enable it effectively:
+
+```c
+// Configure topology for work stealing
+void configure_dynamic_topology(iree_task_topology_t* topology) {
+  for (int i = 0; i < 8; i++) {
+    iree_task_topology_group_t* group = &topology->groups[i];
+    
+    // Allow stealing from nearby cores
+    if (i < 4) {
+      // Cluster 0: Can steal from cluster 0 (prioritize) and cluster 1
+      group->constructive_sharing_mask = 0b11111111;  // All cores
+    } else {
+      // Cluster 1: Can steal from cluster 1 (prioritize) and cluster 0
+      group->constructive_sharing_mask = 0b11111111;  // All cores
+    }
+  }
+  
+  // Workers will naturally rebalance via work stealing
+  // No fixed pinning - dynamic load balancing!
+}
+```
+
+#### Monitoring and Adaptation
+
+Track dispatch execution to refine dynamic decisions:
+
+```c
+typedef struct {
+  uint64_t dispatch_id;
+  uint64_t start_time_ns;
+  uint64_t duration_ns;
+  iree_task_affinity_set_t cores_used;
+  uint32_t cluster_id;
+  float achieved_utilization;
+} dispatch_history_t;
+
+void learn_from_dispatch_execution(
+    scheduler_t* scheduler,
+    dispatch_history_t* history) {
+  
+  // Update dispatch characteristics database
+  if (history->achieved_utilization > 0.9) {
+    // Good assignment - record for similar dispatches
+    record_successful_assignment(
+        scheduler->dispatch_db,
+        history->dispatch_id,
+        history->cluster_id);
+  } else if (history->achieved_utilization < 0.5) {
+    // Poor assignment - avoid in future
+    record_poor_assignment(
+        scheduler->dispatch_db,
+        history->dispatch_id,
+        history->cluster_id);
+  }
+}
+```
+
+#### Benefits of Dynamic Dispatch
+
+1. **No Fixed Reservations**: Cores aren't locked to specific workloads
+2. **Load Balancing**: Work naturally flows to available cores
+3. **Adaptability**: Responds to thermal throttling, priority changes
+4. **Efficiency**: Maximizes utilization across all cores
+5. **Flexibility**: Same hardware can serve diverse workload mixes
+
+#### Implementation Strategy
+
+**Phase 1: Basic Dynamic Assignment**
+- Compute affinity per command buffer submission
+- Choose cluster based on current load
+- No fixed core masks
+
+**Phase 2: Per-Dispatch Granularity**
+- Iterate dispatches within command buffer
+- Assign affinity per dispatch
+- Queue if cores unavailable
+
+**Phase 3: Shard-Level Distribution**
+- Use dispatch sharding mechanism
+- Distribute shards to available workers
+- Leverage work stealing
+
+**Phase 4: Adaptive Learning**
+- Track dispatch execution history
+- Refine assignment decisions
+- Predict optimal core assignments
+
 ### Reactive Scheduling for Robotics
 
 For reactive scheduling that adapts to environment:

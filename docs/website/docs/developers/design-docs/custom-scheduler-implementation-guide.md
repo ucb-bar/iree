@@ -506,6 +506,380 @@ void iree_job_shop_scheduler_update_telemetry(
 }
 ```
 
+## Step 3.5: Dynamic Dispatch (High-Granularity Scheduling)
+
+### Overview
+
+Instead of statically assigning workloads to fixed core sets, implement **dynamic per-dispatch scheduling** where each kernel/dispatch is assigned to cores at runtime based on current system state. This avoids fixed core reservations and maximizes flexibility.
+
+### Dynamic Affinity Computation
+
+```c
+// scheduler.c - Add dynamic affinity computation
+
+// Compute affinity dynamically for each dispatch
+static iree_task_affinity_set_t compute_dynamic_affinity(
+    iree_job_shop_scheduler_t* scheduler,
+    iree_scheduler_job_t* job) {
+  
+  // Get current cluster utilization
+  float util0 = (float)iree_atomic_load_int32(
+      &scheduler->clusters[0].active_jobs, 
+      iree_memory_order_relaxed) / 
+      scheduler->clusters[0].max_concurrent_jobs;
+  
+  float util1 = (float)iree_atomic_load_int32(
+      &scheduler->clusters[1].active_jobs,
+      iree_memory_order_relaxed) / 
+      scheduler->clusters[1].max_concurrent_jobs;
+  
+  // NPU required - can only use cluster 1
+  if (job->metadata.requires_npu) {
+    if (iree_npu_manager_try_acquire(scheduler->npu_manager, job)) {
+      return scheduler->clusters[1].core_mask;  // Cores 4-7
+    }
+    return 0;  // Queue for later
+  }
+  
+  // Dynamic selection for general compute
+  
+  // Prefer cluster 0 if significantly less loaded
+  if (util0 < util1 * 0.7f) {
+    return scheduler->clusters[0].core_mask;
+  }
+  
+  // Use cluster 1 if available and NPU not in use
+  if (util1 < 0.8f && 
+      iree_atomic_load_int32(&scheduler->npu_manager->npu_in_use,
+                             iree_memory_order_relaxed) == 0) {
+    return scheduler->clusters[1].core_mask;
+  }
+  
+  // Fallback: least loaded cluster
+  return (util0 <= util1) ? 
+      scheduler->clusters[0].core_mask : 
+      scheduler->clusters[1].core_mask;
+}
+
+// Modified scheduling to use dynamic affinity
+iree_status_t iree_job_shop_scheduler_schedule(
+    iree_job_shop_scheduler_t* scheduler) {
+  
+  iree_slim_mutex_lock(&scheduler->queue_mutex);
+  
+  iree_scheduler_job_t* job = scheduler->ready_queue_head;
+  while (job != NULL) {
+    iree_scheduler_job_t* next = job->next;
+    
+    // DYNAMIC: Compute affinity at dispatch time
+    iree_task_affinity_set_t assigned_cores = 
+        compute_dynamic_affinity(scheduler, job);
+    
+    // If no cores available, skip and try next
+    if (assigned_cores == 0) {
+      job = next;
+      continue;
+    }
+    
+    // Dispatch with dynamically assigned affinity
+    iree_status_t status = dispatch_job_to_executor(
+        scheduler, job, assigned_cores);
+    
+    if (iree_status_is_ok(status)) {
+      job->state = IREE_JOB_STATE_SCHEDULED;
+      job->assigned_cores = assigned_cores;  // Record decision
+      
+      // Update cluster load
+      uint32_t cluster_id = (assigned_cores & 0b00001111) ? 0 : 1;
+      iree_atomic_fetch_add_int32(
+          &scheduler->clusters[cluster_id].active_jobs, 1,
+          iree_memory_order_relaxed);
+      
+      remove_from_queue(&scheduler->ready_queue_head, job);
+    }
+    
+    job = next;
+  }
+  
+  iree_slim_mutex_unlock(&scheduler->queue_mutex);
+  return iree_ok_status();
+}
+```
+
+### Fine-Grained Per-Core Selection
+
+For even finer granularity, select specific cores within clusters:
+
+```c
+// Select N least-loaded cores dynamically
+static iree_task_affinity_set_t select_least_loaded_cores(
+    iree_job_shop_scheduler_t* scheduler,
+    uint32_t num_cores_needed) {
+  
+  // Track per-core load (simplified - could track per-worker queues)
+  uint32_t core_load[8] = {0};
+  
+  // Estimate load from active jobs
+  for (int i = 0; i < 4; i++) {
+    core_load[i] = iree_atomic_load_int32(
+        &scheduler->clusters[0].active_jobs,
+        iree_memory_order_relaxed);
+  }
+  for (int i = 4; i < 8; i++) {
+    core_load[i] = iree_atomic_load_int32(
+        &scheduler->clusters[1].active_jobs,
+        iree_memory_order_relaxed);
+  }
+  
+  // Sort cores by load
+  uint32_t sorted_cores[8];
+  for (int i = 0; i < 8; i++) sorted_cores[i] = i;
+  
+  // Simple bubble sort (for clarity)
+  for (int i = 0; i < 8; i++) {
+    for (int j = i + 1; j < 8; j++) {
+      if (core_load[sorted_cores[j]] < core_load[sorted_cores[i]]) {
+        uint32_t tmp = sorted_cores[i];
+        sorted_cores[i] = sorted_cores[j];
+        sorted_cores[j] = tmp;
+      }
+    }
+  }
+  
+  // Build affinity mask with N least-loaded cores
+  iree_task_affinity_set_t affinity = 0;
+  for (uint32_t i = 0; i < num_cores_needed && i < 8; i++) {
+    affinity |= (1ULL << sorted_cores[i]);
+  }
+  
+  return affinity;
+}
+```
+
+### Per-Dispatch Iteration in Command Buffer
+
+For highest granularity, iterate dispatches within command buffers:
+
+```c
+// job_shop_device.c - Iterate dispatches within command buffer
+
+static iree_status_t iree_hal_job_shop_device_queue_execute(
+    iree_hal_device_t* base_device,
+    iree_hal_queue_affinity_t queue_affinity,
+    const iree_hal_semaphore_list_t wait_semaphore_list,
+    const iree_hal_semaphore_list_t signal_semaphore_list,
+    iree_host_size_t command_buffer_count,
+    iree_hal_command_buffer_t* const* command_buffers,
+    iree_hal_buffer_binding_table_t const* binding_tables) {
+  
+  iree_hal_job_shop_device_t* device = 
+      (iree_hal_job_shop_device_t*)base_device;
+  
+  // Iterate through each command buffer
+  for (iree_host_size_t i = 0; i < command_buffer_count; i++) {
+    iree_hal_command_buffer_t* cmd = command_buffers[i];
+    
+    // Get dispatch commands from command buffer
+    // Note: This requires accessing command buffer internals
+    // In practice, you might process this differently
+    
+    iree_host_size_t dispatch_count = get_dispatch_count(cmd);
+    
+    for (iree_host_size_t d = 0; d < dispatch_count; d++) {
+      dispatch_info_t dispatch_info = get_dispatch_info(cmd, d);
+      
+      // Analyze each dispatch individually
+      iree_job_metadata_t metadata = {
+        .job_id = i,
+        .operation_id = d,
+        .priority = analyze_dispatch_priority(&dispatch_info),
+        .requires_npu = dispatch_needs_npu(&dispatch_info),
+        .estimated_duration_ns = estimate_dispatch_duration(&dispatch_info),
+      };
+      
+      // Submit each dispatch separately with dynamic scheduling
+      iree_status_t status = iree_job_shop_scheduler_submit(
+          &device->scheduler,
+          metadata,
+          create_single_dispatch_cmd(cmd, d),
+          wait_semaphore_list,
+          signal_semaphore_list);
+      
+      IREE_RETURN_IF_ERROR(status);
+    }
+  }
+  
+  return iree_ok_status();
+}
+```
+
+### Dispatch Shard Dynamic Distribution
+
+Leverage IREE's dispatch sharding for work distribution:
+
+```c
+// Custom shard distribution based on available cores
+
+static iree_status_t distribute_dispatch_dynamically(
+    iree_job_shop_scheduler_t* scheduler,
+    iree_task_dispatch_t* dispatch) {
+  
+  // Get currently available cores (dynamic!)
+  iree_task_affinity_set_t available = 
+      get_available_cores(scheduler);
+  
+  uint32_t num_available = iree_math_count_ones_u64(available);
+  
+  if (num_available == 0) {
+    // No cores available - queue for later
+    return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED);
+  }
+  
+  // Create shards for available workers
+  uint32_t total_tiles = dispatch->workgroup_count.x *
+                         dispatch->workgroup_count.y *
+                         dispatch->workgroup_count.z;
+  
+  for (uint32_t i = 0; i < num_available; i++) {
+    // Get worker ID for this shard
+    uint32_t worker_bit_pos = get_nth_set_bit(available, i);
+    
+    // Create shard targeting specific worker
+    iree_task_dispatch_shard_t* shard = 
+        create_dispatch_shard(dispatch, scheduler->allocator);
+    
+    // Assign to specific available worker
+    shard->header.affinity_set = (1ULL << worker_bit_pos);
+    
+    // Submit shard
+    submit_shard_to_executor(scheduler->task_executor, shard);
+  }
+  
+  return iree_ok_status();
+}
+
+// Helper: Get currently available (non-busy) cores
+static iree_task_affinity_set_t get_available_cores(
+    iree_job_shop_scheduler_t* scheduler) {
+  
+  iree_task_affinity_set_t available = 0;
+  
+  // Check cluster 0
+  int32_t load0 = iree_atomic_load_int32(
+      &scheduler->clusters[0].active_jobs,
+      iree_memory_order_relaxed);
+  
+  if (load0 < scheduler->clusters[0].max_concurrent_jobs) {
+    available |= scheduler->clusters[0].core_mask;
+  }
+  
+  // Check cluster 1
+  int32_t load1 = iree_atomic_load_int32(
+      &scheduler->clusters[1].active_jobs,
+      iree_memory_order_relaxed);
+  
+  // Only include cluster 1 if NPU not exclusively locked
+  bool npu_locked = iree_atomic_load_int32(
+      &scheduler->npu_manager->npu_in_use,
+      iree_memory_order_relaxed) != 0;
+  
+  if (load1 < scheduler->clusters[1].max_concurrent_jobs && !npu_locked) {
+    available |= scheduler->clusters[1].core_mask;
+  }
+  
+  return available;
+}
+```
+
+### Adaptive Learning for Future Dispatches
+
+Track execution history to improve future decisions:
+
+```c
+// Add to scheduler.h
+typedef struct {
+  uint64_t dispatch_hash;  // Hash of dispatch characteristics
+  uint32_t preferred_cluster;
+  float avg_utilization;
+  uint32_t execution_count;
+} dispatch_profile_t;
+
+typedef struct {
+  dispatch_profile_t profiles[256];  // Dispatch history
+  uint32_t profile_count;
+} dispatch_database_t;
+
+// Add to scheduler.c
+static void update_dispatch_profile(
+    iree_job_shop_scheduler_t* scheduler,
+    iree_scheduler_job_t* completed_job) {
+  
+  // Compute dispatch hash (based on workgroup size, kernel, etc.)
+  uint64_t hash = compute_dispatch_hash(completed_job);
+  
+  // Find or create profile
+  dispatch_profile_t* profile = 
+      find_dispatch_profile(&scheduler->dispatch_db, hash);
+  
+  if (!profile) {
+    profile = create_dispatch_profile(&scheduler->dispatch_db, hash);
+  }
+  
+  // Update statistics
+  uint32_t cluster = (completed_job->assigned_cores & 0b00001111) ? 0 : 1;
+  float utilization = compute_utilization(completed_job);
+  
+  profile->avg_utilization = 
+      (profile->avg_utilization * profile->execution_count + utilization) /
+      (profile->execution_count + 1);
+  
+  if (utilization > 0.8f) {
+    profile->preferred_cluster = cluster;
+  }
+  
+  profile->execution_count++;
+}
+
+// Use profile in scheduling decision
+static iree_task_affinity_set_t compute_smart_affinity(
+    iree_job_shop_scheduler_t* scheduler,
+    iree_scheduler_job_t* job) {
+  
+  // Check if we have historical data
+  uint64_t hash = compute_dispatch_hash(job);
+  dispatch_profile_t* profile = 
+      find_dispatch_profile(&scheduler->dispatch_db, hash);
+  
+  if (profile && profile->execution_count > 5) {
+    // Use learned preference if available
+    uint32_t preferred = profile->preferred_cluster;
+    if (is_cluster_available(scheduler, preferred)) {
+      return scheduler->clusters[preferred].core_mask;
+    }
+  }
+  
+  // Fallback to dynamic computation
+  return compute_dynamic_affinity(scheduler, job);
+}
+```
+
+### Key Benefits
+
+1. **No Fixed Reservations**: Cores aren't statically partitioned
+2. **Adaptive**: Responds to load, thermal state, failures
+3. **Fine-Grained**: Per-dispatch or even per-shard control
+4. **Efficient**: Maximizes hardware utilization
+5. **Learning**: Improves over time with execution history
+
+### Trade-offs
+
+- **Complexity**: More complex than static partitioning
+- **Overhead**: Per-dispatch decisions add ~1-5μs overhead
+- **Predictability**: Less deterministic than fixed assignment
+- **Testing**: Harder to reproduce specific scenarios
+
+For real-time robotics, consider hybrid: use dynamic dispatch with fallback to priority lanes when deadlines are tight.
+
 ## Step 4: Implement the HAL Device
 
 ### job_shop_device.h
