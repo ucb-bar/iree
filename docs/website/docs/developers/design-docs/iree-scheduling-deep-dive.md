@@ -12,8 +12,9 @@ This document provides a comprehensive analysis of how IREE performs scheduling 
 4. [CPU Core Allocation and Affinity](#cpu-allocation)
 5. [Concurrent Execution and Pipelining](#concurrent-execution)
 6. [Implementing Custom Scheduling Policies](#custom-scheduling)
-7. [Key Files for Scheduling Implementation](#key-files)
-8. [Recommendations for Flexible Job Shop Scheduling](#recommendations)
+7. [Ahead-of-Time (AOT) Scheduling with Flexible Job Shop](#aot-scheduling)
+8. [Key Files for Scheduling Implementation](#key-files)
+9. [Recommendations for Flexible Job Shop Scheduling](#recommendations)
 
 ## Overview of IREE's Multi-Layer Scheduling {#overview}
 
@@ -1033,6 +1034,635 @@ Based on your requirements (4 cores/cluster × 2 clusters, 1 with NPU, robotics)
    - Verify deadline satisfaction
    - Test reactive scheduling behavior
    - Measure latency distribution
+
+## Ahead-of-Time (AOT) Scheduling with Flexible Job Shop {#aot-scheduling}
+
+### Overview
+
+Instead of relying entirely on runtime scheduling, you can implement **heavy ahead-of-time scheduling** where the compiler pre-computes an optimal schedule based on known architecture, software characteristics, and workload patterns. This is particularly valuable when you have:
+
+- **Known hardware topology**: Fixed CPU clusters, accelerator configurations
+- **Known workloads**: Multiple models with predictable characteristics
+- **Deterministic requirements**: Real-time robotics with hard deadlines
+- **Optimization opportunities**: Cross-model scheduling that runtime can't see
+
+### AOT Scheduling Architecture
+
+```
+┌────────────────────────────────────────────────────────┐
+│         Compiler (Ahead-of-Time)                       │
+│                                                        │
+│  1. Analyze multiple models/workloads                 │
+│  2. Build combined scheduling graph                   │
+│  3. Run Flexible Job Shop Scheduling algorithm        │
+│  4. Compute optimal schedule with windows             │
+│  5. Emit schedule as IR annotations/metadata          │
+└────────────────────┬───────────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────────┐
+│         Stream Dialect (Schedule Encoding)             │
+│                                                        │
+│  - Annotate dispatches with timing/affinity           │
+│  - Insert explicit barriers/dependencies              │
+│  - Encode resource reservations                       │
+│  - Generate async execution with fences               │
+└────────────────────┬───────────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────────┐
+│         Runtime (Schedule Execution)                   │
+│                                                        │
+│  - Read schedule annotations                          │
+│  - Enforce timing/affinity constraints                │
+│  - Handle deviations (adaptive fallback)              │
+│  - Monitor execution vs. predicted schedule           │
+└────────────────────────────────────────────────────────┘
+```
+
+### Where to Implement AOT Scheduling
+
+#### Option 1: Custom Compiler Pass (Recommended)
+
+**Location**: `compiler/src/iree/compiler/Dialect/Stream/Transforms/FlexibleJobShopScheduling.cpp`
+
+**Approach**: Add a new pass that runs after `ScheduleExecution` but before lowering to HAL:
+
+```cpp
+// FlexibleJobShopScheduling.cpp
+
+class FlexibleJobShopSchedulingPass 
+    : public PassWrapper<FlexibleJobShopSchedulingPass, 
+                         OperationPass<ModuleOp>> {
+public:
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    
+    // 1. Collect all dispatches across all functions
+    SmallVector<DispatchInfo> dispatches;
+    collectDispatches(module, dispatches);
+    
+    // 2. Build scheduling graph with dependencies
+    SchedulingGraph graph = buildSchedulingGraph(dispatches);
+    
+    // 3. Run Flexible Job Shop Scheduling algorithm
+    Schedule optimalSchedule = 
+        computeFlexibleJobShopSchedule(graph, hardwareTopology_);
+    
+    // 4. Apply schedule by annotating IR
+    applyScheduleToIR(module, optimalSchedule);
+  }
+  
+private:
+  void applyScheduleToIR(ModuleOp module, const Schedule& schedule) {
+    for (const ScheduleDecision& decision : schedule.decisions) {
+      // Find dispatch operation
+      auto dispatchOp = findDispatch(module, decision.dispatchId);
+      
+      // Annotate with scheduling decisions
+      dispatchOp->setAttr("iree.scheduling.start_time_ns",
+                          builder.getI64IntegerAttr(decision.startTime));
+      dispatchOp->setAttr("iree.scheduling.affinity",
+                          builder.getI64IntegerAttr(decision.affinity));
+      dispatchOp->setAttr("iree.scheduling.priority",
+                          builder.getI32IntegerAttr(decision.priority));
+      
+      // Encode resource reservations
+      if (decision.requiresNPU) {
+        dispatchOp->setAttr("iree.scheduling.resource",
+                            builder.getStringAttr("npu"));
+      }
+    }
+  }
+};
+```
+
+**Integration Point**: Add to pass pipeline in `Passes.cpp`:
+
+```cpp
+void buildIREEVMTransformPassPipeline(OpPassManager &pm) {
+  // ... existing passes ...
+  pm.addPass(createScheduleExecutionPass());
+  pm.addPass(createScheduleAllocationPass());
+  
+  // ADD YOUR AOT SCHEDULING PASS HERE
+  pm.addPass(createFlexibleJobShopSchedulingPass());
+  
+  pm.addPass(createScheduleConcurrencyPass());
+  // ... rest of pipeline ...
+}
+```
+
+#### Option 2: External Tool + IR Annotation
+
+**Approach**: Separate optimization tool that analyzes compiled modules and produces scheduling annotations:
+
+```python
+# aot_scheduler.py - External scheduling tool
+
+import iree.compiler as compiler
+import networkx as nx
+from ortools.sat.python import cp_model
+
+def schedule_multiple_modules(module_paths, hardware_config):
+    # 1. Load and analyze modules
+    modules = [load_iree_module(path) for path in module_paths]
+    
+    # 2. Extract dispatch information
+    dispatches = []
+    for module in modules:
+        dispatches.extend(extract_dispatches(module))
+    
+    # 3. Build job shop scheduling model
+    model = cp_model.CpModel()
+    
+    # Variables: start time, assigned core for each dispatch
+    starts = {}
+    cores = {}
+    
+    for d in dispatches:
+        starts[d.id] = model.NewIntVar(0, MAX_TIME, f'start_{d.id}')
+        cores[d.id] = model.NewIntVar(0, NUM_CORES-1, f'core_{d.id}')
+    
+    # 4. Add constraints
+    # - Precedence constraints (dependencies)
+    for dep in get_dependencies(dispatches):
+        model.Add(starts[dep.successor] >= 
+                  starts[dep.predecessor] + dep.predecessor.duration)
+    
+    # - Resource constraints (NPU exclusivity)
+    for d1, d2 in get_npu_dispatches(dispatches):
+        if d1 != d2:
+            model.AddNoOverlap([
+                model.NewIntervalVar(starts[d1.id], d1.duration, ...),
+                model.NewIntervalVar(starts[d2.id], d2.duration, ...)
+            ])
+    
+    # - Core capacity constraints
+    for core_id in range(NUM_CORES):
+        core_dispatches = [d for d in dispatches 
+                           if can_run_on_core(d, core_id)]
+        # Add disjunctive constraint for core
+        model.AddNoOverlap([...])
+    
+    # 5. Optimize (minimize makespan)
+    makespan = model.NewIntVar(0, MAX_TIME, 'makespan')
+    for d in dispatches:
+        model.Add(makespan >= starts[d.id] + d.duration)
+    
+    model.Minimize(makespan)
+    
+    # 6. Solve
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
+    
+    if status == cp_model.OPTIMAL:
+        schedule = {
+            d.id: {
+                'start_time': solver.Value(starts[d.id]),
+                'core': solver.Value(cores[d.id])
+            }
+            for d in dispatches
+        }
+        return schedule
+    
+    return None
+
+# 7. Emit annotated IR
+def emit_scheduled_mlir(modules, schedule, output_path):
+    for module in modules:
+        for dispatch in module.dispatches:
+            sched = schedule[dispatch.id]
+            
+            # Add scheduling attributes
+            dispatch.add_attr('iree.scheduling.start_time_ns', sched['start_time'])
+            dispatch.add_attr('iree.scheduling.affinity', 1 << sched['core'])
+    
+    # Serialize back to MLIR with annotations
+    compiler.write_mlir(modules, output_path)
+```
+
+**Usage**:
+```bash
+# 1. Compile modules to MLIR (before final lowering)
+iree-compile model_a.mlir -o=model_a.scheduled.mlir --emit-mlir
+iree-compile model_b.mlir -o=model_b.scheduled.mlir --emit-mlir
+
+# 2. Run AOT scheduler
+python aot_scheduler.py \
+    --inputs model_a.scheduled.mlir model_b.scheduled.mlir \
+    --hardware-config cluster_config.json \
+    --output scheduled_combined.mlir
+
+# 3. Continue compilation with schedule
+iree-compile scheduled_combined.mlir -o=final.vmfb
+```
+
+### How to Encode Schedule in IR
+
+#### Stream Dialect Annotations
+
+Add custom attributes to stream operations:
+
+```mlir
+// Before AOT scheduling
+stream.cmd.execute with(%buffer) {
+  stream.cmd.dispatch @workload[%x, %y, %z](%buffer)
+}
+
+// After AOT scheduling
+stream.cmd.execute with(%buffer) {
+  stream.cmd.dispatch @workload[%x, %y, %z](%buffer)
+    {
+      iree.scheduling.start_time_ns = 1500000 : i64,
+      iree.scheduling.affinity = 240 : i64,  // 0b11110000 = cores 4-7
+      iree.scheduling.priority = 100 : i32,
+      iree.scheduling.resource = "npu"
+    }
+}
+```
+
+#### Explicit Timeline Construction
+
+Use async-external execution model with explicit fences:
+
+```mlir
+// model_a.mlir
+module @model_a {
+  func.func @predict_async(%input: tensor<1x224x224x3xf32>) 
+      -> !hal.fence attributes {
+    iree.abi.model = "async-external"
+  } {
+    %fence = hal.fence.create : !hal.fence
+    
+    // Dispatch annotated with schedule
+    stream.cmd.execute 
+        on(#hal.affinity.queue<[0]>)  // Cluster 0
+        wait(%input_ready_fence)
+        signal(%fence) {
+      stream.cmd.dispatch @conv2d[%x, %y, %z](%input)
+        { iree.scheduling.start_time_ns = 0 : i64 }
+    }
+    
+    return %fence : !hal.fence
+  }
+}
+
+// model_b.mlir  
+module @model_b {
+  func.func @plan_async(%perception: tensor<...>) 
+      -> !hal.fence attributes {
+    iree.abi.model = "async-external"
+  } {
+    %fence = hal.fence.create : !hal.fence
+    
+    // Runs after model_a, on cluster 1 with NPU
+    stream.cmd.execute
+        on(#hal.affinity.queue<[1]>)  // Cluster 1
+        wait(%perception_fence)
+        signal(%fence) {
+      stream.cmd.dispatch @npu_planning[%x, %y, %z](%perception)
+        { 
+          iree.scheduling.start_time_ns = 5000000 : i64,
+          iree.scheduling.resource = "npu"
+        }
+    }
+    
+    return %fence : !hal.fence
+  }
+}
+```
+
+### Runtime Integration
+
+The runtime needs to respect the AOT schedule while adapting to reality:
+
+#### Option 1: Strict Enforcement (Deterministic)
+
+```c
+// Custom HAL device that enforces AOT schedule
+
+static iree_status_t aot_scheduled_device_queue_execute(
+    iree_hal_device_t* base_device,
+    iree_hal_command_buffer_t* command_buffer,
+    ...) {
+  
+  aot_scheduled_device_t* device = (aot_scheduled_device_t*)base_device;
+  
+  // Extract schedule from command buffer metadata
+  int64_t scheduled_start_time_ns = 
+      get_dispatch_attr(command_buffer, "iree.scheduling.start_time_ns");
+  int64_t scheduled_affinity =
+      get_dispatch_attr(command_buffer, "iree.scheduling.affinity");
+  
+  // Wait until scheduled start time
+  int64_t current_time_ns = iree_time_now();
+  if (current_time_ns < scheduled_start_time_ns) {
+    iree_time_t wait_duration = scheduled_start_time_ns - current_time_ns;
+    iree_wait_until(device->timer, wait_duration);
+  }
+  
+  // Enforce affinity
+  iree_task_t* task = create_task_for_command_buffer(command_buffer);
+  task->affinity_set = (iree_task_affinity_set_t)scheduled_affinity;
+  
+  // Submit with schedule constraints
+  return submit_task_at_time(device->executor, task, scheduled_start_time_ns);
+}
+```
+
+#### Option 2: Adaptive Execution (Practical)
+
+```c
+// Respects schedule but adapts to deviations
+
+static iree_status_t adaptive_aot_device_queue_execute(
+    iree_hal_device_t* base_device,
+    iree_hal_command_buffer_t* command_buffer,
+    ...) {
+  
+  adaptive_aot_device_t* device = (adaptive_aot_device_t*)base_device;
+  
+  // Get scheduled parameters
+  int64_t scheduled_start_ns = get_dispatch_attr(
+      command_buffer, "iree.scheduling.start_time_ns");
+  int64_t scheduled_affinity = get_dispatch_attr(
+      command_buffer, "iree.scheduling.affinity");
+  int32_t priority = get_dispatch_attr(
+      command_buffer, "iree.scheduling.priority");
+  
+  int64_t current_time = iree_time_now();
+  int64_t schedule_slack = current_time - scheduled_start_ns;
+  
+  // If we're behind schedule, adjust
+  if (schedule_slack > THRESHOLD_NS) {
+    // We're late - boost priority
+    priority = min(priority + 50, 255);
+    
+    // Maybe use different cores if scheduled ones are busy
+    scheduled_affinity = compute_adaptive_affinity(
+        device, scheduled_affinity, priority);
+  }
+  
+  // Create task with schedule hints
+  iree_task_t* task = create_task_for_command_buffer(command_buffer);
+  task->affinity_set = (iree_task_affinity_set_t)scheduled_affinity;
+  task->priority = priority;
+  task->scheduled_start_time_ns = scheduled_start_ns;
+  
+  // Submit - runtime will try to respect schedule but can adapt
+  return submit_task_with_schedule(device->executor, task);
+}
+```
+
+### Windowed Flexible Job Shop Scheduling
+
+For long-running robotics applications, use **sliding window** approach:
+
+```c
+// Compiler: Compute schedule for next N time windows
+
+Schedule compute_windowed_schedule(
+    WorkloadSet workloads,
+    HardwareConfig hardware,
+    uint32_t window_size_ms,
+    uint32_t num_windows) {
+  
+  Schedule full_schedule;
+  
+  for (uint32_t window = 0; window < num_windows; window++) {
+    uint64_t window_start = window * window_size_ms * 1000000;
+    uint64_t window_end = window_start + window_size_ms * 1000000;
+    
+    // Get jobs active in this window
+    JobSet window_jobs = get_jobs_in_window(
+        workloads, window_start, window_end);
+    
+    // Solve job shop scheduling for this window
+    WindowSchedule window_schedule = solve_job_shop(
+        window_jobs, hardware, window_start, window_end);
+    
+    // Add to full schedule
+    full_schedule.merge(window_schedule);
+  }
+  
+  return full_schedule;
+}
+
+// Runtime: Execute current window, prepare next
+
+void execute_windowed_schedule(runtime_t* runtime) {
+  uint32_t current_window = 0;
+  
+  while (runtime->running) {
+    // Execute current window schedule
+    execute_window(runtime, current_window);
+    
+    // Prepare next window (can overlap with execution)
+    prepare_window(runtime, current_window + 1);
+    
+    // Advance window
+    current_window++;
+    
+    // Optional: Recompute schedule if environment changed significantly
+    if (deviation_too_large(runtime)) {
+      recompute_schedule(runtime, current_window);
+    }
+  }
+}
+```
+
+### Information Needed for AOT Scheduling
+
+To design an effective AOT schedule, collect:
+
+#### 1. Hardware Topology
+```json
+{
+  "clusters": [
+    {
+      "id": 0,
+      "cores": [0, 1, 2, 3],
+      "l2_cache_kb": 2048,
+      "max_frequency_mhz": 2400
+    },
+    {
+      "id": 1,
+      "cores": [4, 5, 6, 7],
+      "l2_cache_kb": 2048,
+      "npu": {
+        "type": "risc-v-extension",
+        "ops_per_sec": 1000000000000
+      }
+    }
+  ],
+  "shared_l3_cache_kb": 8192,
+  "memory_bandwidth_gbps": 50
+}
+```
+
+#### 2. Workload Characteristics
+```python
+# Profile each model's dispatches
+workload_profiles = {
+    'model_a': {
+        'dispatches': [
+            {
+                'name': 'conv2d_1',
+                'estimated_cycles': 1500000,
+                'memory_bytes': 4096000,
+                'requires_npu': False,
+                'frequency': 30  # Hz - runs 30 times/sec
+            },
+            # ... more dispatches
+        ]
+    },
+    'model_b': {
+        'dispatches': [
+            {
+                'name': 'npu_matmul',
+                'estimated_cycles': 2000000,
+                'requires_npu': True,
+                'frequency': 10  # Hz
+            }
+        ]
+    }
+}
+```
+
+#### 3. Dependencies Between Models
+```python
+dependencies = {
+    'model_b.input': 'model_a.output',  # Model B depends on Model A
+    'model_c.planning': 'model_b.features',
+}
+```
+
+#### 4. Real-time Constraints
+```python
+deadlines = {
+    'model_a.predict': 33_000_000,  # 33ms (30 FPS)
+    'model_b.plan': 100_000_000,    # 100ms
+    'model_c.control': 10_000_000,  # 10ms (critical!)
+}
+```
+
+### Does This Replace Runtime Scheduling?
+
+**No, it complements it:**
+
+- **Compiler (AOT)**: Computes optimal schedule assuming perfect conditions
+- **Runtime**: Executes schedule but adapts to reality (cache misses, interrupts, thermal throttling)
+
+**Hybrid approach works best:**
+
+```
+Compiler:
+  ├─ Compute global optimal schedule
+  ├─ Encode as IR annotations
+  └─ Generate async execution structure
+
+Runtime:
+  ├─ Read schedule annotations
+  ├─ Try to follow schedule (start times, affinity)
+  ├─ Adapt when deviations occur
+  │  ├─ Adjust priorities
+  │  ├─ Reallocate cores
+  │  └─ Skip/defer low-priority work
+  └─ Monitor and report deviations
+```
+
+### Practical Implementation Steps
+
+1. **Phase 1: Profile Workloads**
+   - Run each model independently
+   - Collect dispatch timing, memory usage
+   - Identify NPU requirements
+   
+2. **Phase 2: Build Scheduling Tool**
+   - Implement FJSP algorithm (CP-SAT, genetic algorithm)
+   - Input: workload profiles + hardware config
+   - Output: schedule with start times + affinity
+   
+3. **Phase 3: Integrate with Compiler**
+   - Add custom pass to annotate IR
+   - Use async-external execution model
+   - Emit explicit fences/barriers
+   
+4. **Phase 4: Runtime Support**
+   - Custom HAL device reads annotations
+   - Enforces schedule constraints
+   - Monitors execution vs. plan
+   
+5. **Phase 5: Adaptive Layer**
+   - Handle schedule deviations
+   - Recompute on large deviations
+   - Continuous improvement via profiling
+
+### Example: Combining Networks with AOT Schedule
+
+```bash
+# Compile models with async-external and custom scheduling pass
+
+iree-compile \
+    --iree-execution-model=async-external \
+    --iree-hal-target-device=local \
+    --iree-scheduling-enable-aot=true \
+    --iree-scheduling-workload-profile=model_a_profile.json \
+    model_a.mlir -o=model_a.vmfb
+
+iree-compile \
+    --iree-execution-model=async-external \
+    --iree-hal-target-device=local \
+    --iree-scheduling-enable-aot=true \
+    --iree-scheduling-workload-profile=model_b_profile.json \
+    model_b.mlir -o=model_b.vmfb
+
+# Run combined scheduling analysis
+iree-aot-schedule \
+    --modules model_a.vmfb model_b.vmfb \
+    --hardware-config cluster_config.json \
+    --dependencies model_deps.json \
+    --deadlines deadlines.json \
+    --output combined_schedule.json
+
+# Execute with schedule-aware runtime
+iree-run-module \
+    --device=aot-scheduled \
+    --schedule=combined_schedule.json \
+    --module=model_a.vmfb \
+    --module=model_b.vmfb \
+    --function=execute_pipeline
+```
+
+### Benefits of AOT Scheduling
+
+1. **Optimal Resource Allocation**: Global view enables better decisions
+2. **Deadline Guarantees**: Pre-computed schedule meets timing requirements
+3. **Predictable Performance**: Less runtime variability
+4. **Lower Runtime Overhead**: No runtime scheduling decisions
+5. **Cross-Model Optimization**: Can optimize across model boundaries
+
+### Trade-offs
+
+1. **Reduced Adaptability**: Less responsive to unexpected conditions
+2. **Compilation Complexity**: Requires accurate profiles and models
+3. **Profile Accuracy**: Schedule only as good as profiles
+4. **Hardware Variations**: May not handle heterogeneity well
+5. **Development Effort**: Significant compiler/runtime changes needed
+
+### Recommendation for Your Use Case
+
+Given your requirements (robotics, known hardware/software, hard deadlines):
+
+**Use Hybrid AOT + Adaptive Runtime:**
+
+1. **Compiler**: Compute baseline schedule with FJSP for typical scenarios
+2. **Runtime**: Execute schedule with adaptive fallback
+3. **Monitoring**: Track deviations and trigger replanning
+4. **Windowed**: Use sliding windows for long-running execution
+
+This gives you predictability where possible and flexibility where needed.
 
 ## Summary: Does IREE Already Do This?
 

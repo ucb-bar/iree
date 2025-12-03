@@ -1247,6 +1247,487 @@ iree_status_t iree_job_shop_scheduler_schedule(
 }
 ```
 
+## Step 9: Ahead-of-Time (AOT) Scheduling Integration
+
+### Overview
+
+For maximum control and predictability, implement **ahead-of-time scheduling** where the compiler pre-computes an optimal schedule for multiple models.
+
+### 9.1 Compiler Pass for AOT Scheduling
+
+Create a custom compiler pass to compute and embed schedules:
+
+**File**: `compiler/src/iree/compiler/Dialect/Stream/Transforms/AOTScheduling.cpp`
+
+```cpp
+#include "mlir/Pass/Pass.h"
+#include "iree/compiler/Dialect/Stream/IR/StreamOps.h"
+
+namespace mlir::iree_compiler::IREE::Stream {
+
+// Workload profile data
+struct DispatchProfile {
+  std::string name;
+  int64_t estimatedCycles;
+  int64_t memoryBytes;
+  bool requiresNPU;
+  int32_t priority;
+};
+
+// Scheduled decision
+struct ScheduleDecision {
+  Operation* dispatch;
+  int64_t startTimeNs;
+  int64_t affinityMask;
+  int32_t priority;
+  std::string resource;
+};
+
+class AOTSchedulingPass : public PassWrapper<AOTSchedulingPass, 
+                                             OperationPass<ModuleOp>> {
+public:
+  void getDependentDialects(DialectRegistry& registry) const override {
+    registry.insert<IREE::Stream::StreamDialect>();
+  }
+
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    OpBuilder builder(&getContext());
+    
+    // 1. Collect all dispatches
+    SmallVector<DispatchProfile> profiles;
+    SmallVector<Operation*> dispatchOps;
+    
+    module.walk([&](IREE::Stream::CmdDispatchOp dispatchOp) {
+      dispatchOps.push_back(dispatchOp);
+      
+      // Extract profile info (from attributes or external file)
+      DispatchProfile profile = extractProfile(dispatchOp);
+      profiles.push_back(profile);
+    });
+    
+    // 2. Build dependency graph
+    DenseMap<Operation*, SmallVector<Operation*>> dependencies;
+    buildDependencyGraph(dispatchOps, dependencies);
+    
+    // 3. Solve Flexible Job Shop Scheduling
+    auto schedule = computeOptimalSchedule(
+        profiles, dependencies, hardwareConfig_);
+    
+    // 4. Annotate IR with schedule
+    for (const auto& decision : schedule) {
+      auto dispatchOp = cast<IREE::Stream::CmdDispatchOp>(decision.dispatch);
+      
+      // Add scheduling attributes
+      dispatchOp->setAttr(
+          "iree.scheduling.start_time_ns",
+          builder.getI64IntegerAttr(decision.startTimeNs));
+      
+      dispatchOp->setAttr(
+          "iree.scheduling.affinity",
+          builder.getI64IntegerAttr(decision.affinityMask));
+      
+      dispatchOp->setAttr(
+          "iree.scheduling.priority",
+          builder.getI32IntegerAttr(decision.priority));
+      
+      if (!decision.resource.empty()) {
+        dispatchOp->setAttr(
+            "iree.scheduling.resource",
+            builder.getStringAttr(decision.resource));
+      }
+    }
+  }
+
+private:
+  DispatchProfile extractProfile(IREE::Stream::CmdDispatchOp op) {
+    // Load from external profile file or estimate
+    DispatchProfile profile;
+    profile.name = op.getEntryPoint().getRootReference().str();
+    
+    // Try to read from attributes if available
+    if (auto cycles = op->getAttrOfType<IntegerAttr>("profile.cycles")) {
+      profile.estimatedCycles = cycles.getInt();
+    } else {
+      profile.estimatedCycles = estimateCycles(op);
+    }
+    
+    if (auto needsNPU = op->getAttrOfType<BoolAttr>("requires_npu")) {
+      profile.requiresNPU = needsNPU.getValue();
+    }
+    
+    return profile;
+  }
+  
+  SmallVector<ScheduleDecision> computeOptimalSchedule(
+      ArrayRef<DispatchProfile> profiles,
+      const DenseMap<Operation*, SmallVector<Operation*>>& deps,
+      const HardwareConfig& hardware) {
+    
+    // Simplified FJSP solver (in practice, use OR-Tools or similar)
+    SmallVector<ScheduleDecision> schedule;
+    
+    int64_t currentTime = 0;
+    DenseSet<Operation*> scheduled;
+    
+    while (scheduled.size() < profiles.size()) {
+      // Find ready operations (all deps satisfied)
+      for (size_t i = 0; i < profiles.size(); ++i) {
+        Operation* op = dispatchOps_[i];
+        if (scheduled.contains(op)) continue;
+        
+        bool ready = true;
+        for (auto* dep : deps.lookup(op)) {
+          if (!scheduled.contains(dep)) {
+            ready = false;
+            break;
+          }
+        }
+        
+        if (!ready) continue;
+        
+        // Choose core/cluster for this dispatch
+        const auto& profile = profiles[i];
+        int64_t affinity;
+        
+        if (profile.requiresNPU) {
+          affinity = 0b11110000;  // Cluster 1 (cores 4-7)
+        } else {
+          // Load balance
+          affinity = chooseCluster(currentTime);
+        }
+        
+        ScheduleDecision decision;
+        decision.dispatch = op;
+        decision.startTimeNs = currentTime;
+        decision.affinityMask = affinity;
+        decision.priority = profile.priority;
+        if (profile.requiresNPU) {
+          decision.resource = "npu";
+        }
+        
+        schedule.push_back(decision);
+        scheduled.insert(op);
+        
+        // Advance time
+        currentTime += profile.estimatedCycles * 1000;  // cycles to ns
+      }
+    }
+    
+    return schedule;
+  }
+  
+  SmallVector<Operation*> dispatchOps_;
+  HardwareConfig hardwareConfig_;
+};
+
+} // namespace
+```
+
+### 9.2 Runtime Support for AOT Schedule
+
+Extend your HAL device to read and enforce AOT schedules:
+
+```c
+// job_shop_device.c - Add AOT schedule support
+
+typedef struct {
+  int64_t scheduled_start_time_ns;
+  iree_task_affinity_set_t scheduled_affinity;
+  int32_t scheduled_priority;
+  bool requires_npu;
+} aot_schedule_t;
+
+// Extract schedule from command buffer
+static aot_schedule_t extract_aot_schedule(
+    iree_hal_command_buffer_t* command_buffer) {
+  
+  aot_schedule_t schedule = {0};
+  
+  // Read scheduling attributes embedded by compiler
+  // In practice, this requires accessing command buffer metadata
+  // which may need HAL API extensions
+  
+  // Example: Read from debug metadata or custom segments
+  iree_const_byte_span_t metadata = 
+      get_command_buffer_metadata(command_buffer);
+  
+  if (metadata.data_length > 0) {
+    // Parse metadata (simplified)
+    const uint8_t* ptr = metadata.data;
+    
+    schedule.scheduled_start_time_ns = *(int64_t*)ptr;
+    ptr += sizeof(int64_t);
+    
+    schedule.scheduled_affinity = *(uint64_t*)ptr;
+    ptr += sizeof(uint64_t);
+    
+    schedule.scheduled_priority = *(int32_t*)ptr;
+    ptr += sizeof(int32_t);
+    
+    schedule.requires_npu = *(bool*)ptr;
+  }
+  
+  return schedule;
+}
+
+// Modified queue_execute to respect AOT schedule
+static iree_status_t aot_aware_queue_execute(
+    iree_hal_device_t* base_device,
+    iree_hal_queue_affinity_t queue_affinity,
+    const iree_hal_semaphore_list_t wait_semaphore_list,
+    const iree_hal_semaphore_list_t signal_semaphore_list,
+    iree_host_size_t command_buffer_count,
+    iree_hal_command_buffer_t* const* command_buffers,
+    iree_hal_buffer_binding_table_t const* binding_tables) {
+  
+  iree_hal_job_shop_device_t* device = 
+      (iree_hal_job_shop_device_t*)base_device;
+  
+  // Extract AOT schedule
+  aot_schedule_t aot_schedule = 
+      extract_aot_schedule(command_buffers[0]);
+  
+  // Prepare job metadata
+  iree_job_metadata_t metadata = {
+    .priority = aot_schedule.scheduled_priority,
+    .requires_npu = aot_schedule.requires_npu,
+    .scheduled_start_time_ns = aot_schedule.scheduled_start_time_ns,
+  };
+  
+  // Check if we should wait to match scheduled start time
+  int64_t current_time_ns = iree_time_now();
+  int64_t time_until_start = 
+      aot_schedule.scheduled_start_time_ns - current_time_ns;
+  
+  if (time_until_start > 0 && time_until_start < 100000000) {  // < 100ms
+    // Wait until scheduled start time
+    iree_time_t wait_deadline = 
+        iree_time_now() + iree_make_timeout_ns(time_until_start);
+    iree_notification_t notification;
+    iree_notification_initialize(&notification);
+    iree_notification_await(&notification, wait_deadline);
+    iree_notification_deinitialize(&notification);
+  }
+  
+  // Submit with AOT schedule constraints
+  iree_status_t status = iree_job_shop_scheduler_submit(
+      &device->scheduler,
+      metadata,
+      command_buffers[0],
+      wait_semaphore_list,
+      signal_semaphore_list);
+  
+  // In scheduler, respect affinity
+  // (modify scheduler to use metadata.scheduled_affinity if available)
+  
+  return status;
+}
+```
+
+### 9.3 Using async-external for Multiple Models
+
+Compile models with async-external ABI:
+
+```bash
+# Model A - Perception
+iree-compile \
+    --iree-execution-model=async-external \
+    --iree-hal-target-device=local \
+    --iree-stream-enable-aot-scheduling=true \
+    --iree-stream-workload-profile=model_a_profile.json \
+    model_a.mlir -o=model_a.vmfb
+
+# Model B - Planning (uses NPU)
+iree-compile \
+    --iree-execution-model=async-external \
+    --iree-hal-target-device=local \
+    --iree-stream-enable-aot-scheduling=true \
+    --iree-stream-workload-profile=model_b_profile.json \
+    model_b.mlir -o=model_b.vmfb
+```
+
+**Workload profile** (JSON):
+```json
+{
+  "dispatches": [
+    {
+      "name": "conv2d_1",
+      "estimated_cycles": 1500000,
+      "memory_mb": 4,
+      "requires_npu": false,
+      "priority": 100
+    },
+    {
+      "name": "npu_matmul",
+      "estimated_cycles": 2000000,
+      "memory_mb": 8,
+      "requires_npu": true,
+      "priority": 150
+    }
+  ]
+}
+```
+
+### 9.4 Runtime Execution with Combined Schedule
+
+```c
+// Orchestrate multiple models with AOT schedule
+
+int main(int argc, char** argv) {
+  // Setup as before...
+  iree_hal_device_t* device = /* your AOT-aware device */;
+  
+  // Load multiple models
+  iree_runtime_session_t* session;
+  iree_runtime_session_create_with_device(
+      instance, &session_options, device, allocator, &session);
+  
+  iree_runtime_session_append_bytecode_module_from_file(
+      session, "model_a.vmfb");
+  iree_runtime_session_append_bytecode_module_from_file(
+      session, "model_b.vmfb");
+  
+  // Create shared timeline
+  iree_hal_semaphore_t* timeline;
+  iree_hal_semaphore_create(device, 0, allocator, &timeline);
+  
+  // Execute models with coordinated schedule
+  while (robot_running) {
+    // Model A: Perception (every 33ms)
+    iree_hal_fence_t* fence_a = 
+        iree_hal_fence_create_at(timeline, current_frame, allocator);
+    
+    iree_runtime_call_t call_a;
+    iree_runtime_call_initialize_by_name(
+        session, iree_make_cstring_view("model_a.predict"), &call_a);
+    
+    // Set inputs...
+    
+    // Submit asynchronously - will respect AOT schedule internally
+    iree_runtime_call_invoke_async(
+        &call_a, 
+        /*wait_fence=*/NULL,
+        /*signal_fence=*/fence_a);
+    
+    // Model B: Planning (waits for perception, uses NPU)
+    iree_hal_fence_t* fence_b =
+        iree_hal_fence_create_at(timeline, current_frame + 1, allocator);
+    
+    iree_runtime_call_t call_b;
+    iree_runtime_call_initialize_by_name(
+        session, iree_make_cstring_view("model_b.plan"), &call_b);
+    
+    // Set perception output as input...
+    
+    // Submit - will wait for fence_a, use NPU, follow AOT schedule
+    iree_runtime_call_invoke_async(
+        &call_b,
+        /*wait_fence=*/fence_a,
+        /*signal_fence=*/fence_b);
+    
+    // Wait for frame completion
+    iree_hal_fence_wait(fence_b, iree_infinite_timeout());
+    
+    current_frame += 2;
+  }
+  
+  // Cleanup...
+}
+```
+
+### 9.5 Windowed Scheduling for Long-Running Applications
+
+For continuous robotics applications, use sliding windows:
+
+```c
+// Compute schedule for next N windows at compile time
+// At runtime, execute window-by-window
+
+#define WINDOW_SIZE_MS 100
+#define NUM_WINDOWS 10
+
+typedef struct {
+  uint32_t window_id;
+  int64_t window_start_ns;
+  int64_t window_end_ns;
+  SmallVector<ScheduleDecision> decisions;
+} WindowSchedule;
+
+// Runtime executes windowed schedule
+void execute_windowed_aot_schedule(
+    iree_runtime_session_t* session,
+    WindowSchedule* windows,
+    uint32_t num_windows) {
+  
+  uint32_t current_window = 0;
+  int64_t start_time = iree_time_now();
+  
+  while (current_window < num_windows) {
+    WindowSchedule* window = &windows[current_window];
+    
+    // Wait until window start time
+    int64_t current_time = iree_time_now();
+    int64_t time_to_window = 
+        (start_time + window->window_start_ns) - current_time;
+    
+    if (time_to_window > 0) {
+      iree_wait_for_ns(time_to_window);
+    }
+    
+    // Execute all decisions in this window
+    for (const auto& decision : window->decisions) {
+      execute_dispatch_with_schedule(session, decision);
+    }
+    
+    // Move to next window
+    current_window++;
+    
+    // Optional: Monitor deviation and replan if needed
+    float deviation = compute_schedule_deviation();
+    if (deviation > REPLANNING_THRESHOLD) {
+      recompute_remaining_windows(windows, current_window, num_windows);
+    }
+  }
+}
+```
+
+### 9.6 Integration Checklist
+
+**Compiler Side:**
+- [ ] Add AOT scheduling pass to pipeline
+- [ ] Load workload profiles (cycles, memory, NPU requirements)
+- [ ] Implement FJSP solver (use OR-Tools CP-SAT or genetic algorithm)
+- [ ] Emit schedule as IR attributes
+- [ ] Support async-external execution model
+
+**Runtime Side:**
+- [ ] Extend HAL device to read schedule attributes
+- [ ] Implement timing enforcement (wait until scheduled start)
+- [ ] Respect affinity constraints from schedule
+- [ ] Monitor execution vs. schedule
+- [ ] Handle deviations (adaptive fallback)
+
+**Tools:**
+- [ ] Profiling tool to measure dispatch characteristics
+- [ ] Schedule visualization tool
+- [ ] Deviation monitoring dashboard
+
+### Benefits of AOT Scheduling
+
+✅ **Predictable Performance**: Pre-computed schedule eliminates runtime variability
+✅ **Global Optimization**: Can optimize across model boundaries
+✅ **Deadline Guarantees**: Schedule designed to meet real-time constraints
+✅ **Lower Runtime Overhead**: No complex runtime scheduling decisions
+✅ **Resource Efficiency**: Optimal allocation of NPU and core resources
+
+### Trade-offs
+
+⚠️ **Reduced Flexibility**: Less adaptive to unexpected conditions
+⚠️ **Profile Accuracy**: Schedule only as good as your profiles
+⚠️ **Compilation Time**: Solving FJSP can be expensive
+⚠️ **Maintenance**: Profiles need updates when models/hardware change
+
 ## Summary
 
 This implementation provides:
@@ -1257,14 +1738,43 @@ This implementation provides:
 ✅ **Reactive scheduling** based on temperature/telemetry
 ✅ **Multi-cluster support** with load balancing
 ✅ **Concurrent model execution** via IREE timelines
+✅ **Dynamic dispatch** for fine-grained per-kernel scheduling
+✅ **AOT scheduling** for predictable real-time performance
+
+## Scheduling Approach Decision Matrix
+
+| Approach | Best For | Complexity | Predictability | Flexibility |
+|----------|----------|------------|----------------|-------------|
+| **Runtime Dynamic** | Variable workloads, unknown patterns | Low | Medium | High |
+| **Runtime Job Shop** | Known workloads, soft deadlines | Medium | Medium-High | Medium |
+| **Hybrid AOT+Runtime** | Known workloads, hard deadlines | High | High | Medium |
+| **Pure AOT** | Fixed workloads, critical real-time | Very High | Very High | Low |
+
+**Recommendation for Robotics**: Use **Hybrid AOT+Runtime** with windowed scheduling for best balance.
 
 ## Next Steps
 
-1. **Complete the implementation** by filling in the helper functions
-2. **Add metadata extraction** from command buffers (or compile-time annotations)
-3. **Implement advanced scheduling algorithms** (e.g., genetic algorithms, constraint programming)
-4. **Add profiling and visualization** to tune performance
-5. **Test on real hardware** with your robotics workload
+1. **Profile Your Workloads**
+   - Run each model independently
+   - Measure dispatch timing and resource usage
+   - Identify NPU requirements and critical paths
+
+2. **Choose Scheduling Approach**
+   - Runtime dynamic: Start here for flexibility
+   - Runtime job shop: Add when you understand workload patterns
+   - AOT scheduling: Add when you need real-time guarantees
+
+3. **Implement Incrementally**
+   - Phase 1: Basic topology + affinity (1 week)
+   - Phase 2: Runtime job shop scheduler (2-3 weeks)
+   - Phase 3: AOT scheduling pass (2-3 weeks)
+   - Phase 4: Adaptive layer (1-2 weeks)
+
+4. **Test and Tune**
+   - Validate on real hardware
+   - Measure deadline satisfaction
+   - Tune scheduling parameters
+   - Monitor and adapt
 
 ## Resources
 
