@@ -29,14 +29,18 @@ import os
 import sys
 from pathlib import Path
 
+# Constants
+MOBILENET_V2_URL = "https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx"
+DEFAULT_MODEL_NAME = "mobilenet_v2.onnx"
+
 def download_mobilenet_v2():
     """Download MobileNet V2 ONNX model from ONNX model zoo."""
     print("Downloading MobileNet V2 ONNX model...")
     
     try:
         import urllib.request
-        model_url = "https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx"
-        output_path = "mobilenet_v2.onnx"
+        model_url = MOBILENET_V2_URL
+        output_path = DEFAULT_MODEL_NAME
         
         if os.path.exists(output_path):
             print(f"Model already exists at {output_path}")
@@ -385,11 +389,11 @@ def main():
     
     # Require model path
     if not args.model:
-        if not os.path.exists("mobilenet_v2.onnx"):
-            print("Error: No model specified and mobilenet_v2.onnx not found.")
+        if not os.path.exists(DEFAULT_MODEL_NAME):
+            print(f"Error: No model specified and {DEFAULT_MODEL_NAME} not found.")
             print("Run with --download first, or specify --model <path>")
             return 1
-        args.model = "mobilenet_v2.onnx"
+        args.model = DEFAULT_MODEL_NAME
     
     if not os.path.exists(args.model):
         print(f"Error: Model file not found: {args.model}")
