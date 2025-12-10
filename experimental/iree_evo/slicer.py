@@ -10,7 +10,7 @@ and parse compilation errors for LLM-based debugging.
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class MLIRSlicer:
@@ -83,7 +83,12 @@ class MLIRSlicer:
             matches = re.findall(pattern, mlir_content)
             for match in matches:
                 if isinstance(match, tuple):
-                    op_name = match[0] if match[0] else match[1] if len(match) > 1 else ""
+                    # Extract the first non-empty element from the match tuple
+                    op_name = ""
+                    for element in match:
+                        if element:
+                            op_name = element
+                            break
                 else:
                     op_name = match
                 if op_name:
@@ -145,7 +150,7 @@ class MLIRSlicer:
 
         lines = stderr.split("\n")
         error_summary_parts: List[str] = []
-        error_locations: List[Dict[str, any]] = []
+        error_locations: List[Dict[str, Any]] = []
 
         # Find all error lines and their locations
         for i, line in enumerate(lines):

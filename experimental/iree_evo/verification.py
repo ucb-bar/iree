@@ -12,7 +12,7 @@ for verifying the structural properties of compiled MLIR.
 import os
 import subprocess
 import tempfile
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class LitGen:
@@ -194,7 +194,7 @@ class LitGen:
         test_filepath: str,
         lit_executable: str = "llvm-lit",
         timeout: int = 60,
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """Runs llvm-lit and returns detailed output.
 
         Args:
@@ -248,7 +248,7 @@ class LitGen:
         compile_flags: Optional[List[str]] = None,
         work_dir: Optional[str] = None,
         lit_executable: str = "llvm-lit",
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """Creates a test file, runs it, and returns results.
 
         This is a convenience method that combines test generation and execution.

@@ -13,7 +13,7 @@ import os
 import re
 import subprocess
 import tempfile
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -272,17 +272,8 @@ class IREEEvaluator:
             text=True,
         )
 
-        # Return the combined output (debug info is in stderr)
-        output = result.stderr
-        # Truncate if too long
-        max_length = 10000
-        if len(output) > max_length:
-            output = (
-                output[:max_length // 2]
-                + f"\n... [{len(output) - max_length} characters truncated] ...\n"
-                + output[-max_length // 2:]
-            )
-        return output
+        # Return the combined output (debug info is in stderr), truncated if needed
+        return _truncate_output(result.stderr)
 
     def _verify_structure(self) -> bool:
         """Verifies structural correctness using LIT tests.
@@ -462,7 +453,7 @@ class IREEEvaluator:
         except Exception:
             return float("inf")
 
-    def get_baseline_summary(self) -> Dict[str, any]:
+    def get_baseline_summary(self) -> Dict[str, Any]:
         """Returns a summary of the baseline MLIR for the LLM.
 
         Returns:
@@ -480,15 +471,43 @@ class IREEEvaluator:
             shutil.rmtree(self.work_dir, ignore_errors=True)
 
 
+def _truncate_output(output: str, max_length: int = 10000) -> str:
+    """Truncates output string to a maximum length with ellipsis.
+
+    Args:
+        output: The output string to truncate.
+        max_length: Maximum allowed length.
+
+    Returns:
+        Truncated string if necessary, otherwise the original string.
+    """
+    if len(output) <= max_length:
+        return output
+    half = max_length // 2
+    truncated_chars = len(output) - max_length
+    return (
+        output[:half]
+        + f"\n... [{truncated_chars} characters truncated] ...\n"
+        + output[-half:]
+    )
+
+
 # Try to inherit from openevolve.Evaluator if available
 try:
     from openevolve.evaluator import Evaluator as OpenEvolveEvaluator
 
-    class IREEEvaluator(IREEEvaluator, OpenEvolveEvaluator):
-        """IREE Evaluator with OpenEvolve integration."""
+    class IREEOpenEvolveEvaluator(IREEEvaluator, OpenEvolveEvaluator):
+        """IREE Evaluator with OpenEvolve integration.
+
+        This class combines the IREEEvaluator functionality with the
+        OpenEvolve Evaluator base class for evolutionary optimization.
+        """
 
         pass
 
+    # Make it available as the preferred evaluator when openevolve is present
+    OpenEvolveCompatibleEvaluator = IREEOpenEvolveEvaluator
+
 except ImportError:
     # OpenEvolve not installed, use standalone class
-    pass
+    OpenEvolveCompatibleEvaluator = IREEEvaluator

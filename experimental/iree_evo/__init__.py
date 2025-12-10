@@ -16,7 +16,7 @@ operations into integer math).
 from .knowledge_base import KnowledgeBase
 from .slicer import MLIRSlicer
 from .verification import LitGen
-from .evaluator import IREEEvaluator, CompilationError
+from .evaluator import IREEEvaluator, CompilationError, OpenEvolveCompatibleEvaluator
 from .prompts import PLANNER_PROMPT, CODER_PROMPT
 
 __all__ = [
@@ -24,6 +24,7 @@ __all__ = [
     "MLIRSlicer",
     "LitGen",
     "IREEEvaluator",
+    "OpenEvolveCompatibleEvaluator",
     "CompilationError",
     "PLANNER_PROMPT",
     "CODER_PROMPT",
