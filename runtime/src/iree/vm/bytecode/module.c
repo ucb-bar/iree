@@ -808,15 +808,6 @@ static iree_status_t IREE_API_PTR iree_vm_bytecode_module_notify(
 
 static iree_status_t iree_vm_bytecode_module_begin_call(
     void* self, iree_vm_stack_t* stack, iree_vm_function_call_t call) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: starting\n");
-  fprintf(stdout, "[DEBUG]   self: 0x%p\n", (void*)self);
-  fprintf(stdout, "[DEBUG]   stack: 0x%p\n", (void*)stack);
-  fprintf(stdout, "[DEBUG]   call.function.module: 0x%p\n", (void*)call.function.module);
-  fprintf(stdout, "[DEBUG]   call.function.linkage: %d\n", (int)call.function.linkage);
-  fprintf(stdout, "[DEBUG]   call.function.ordinal: %d\n", (int)call.function.ordinal);
-  fprintf(stdout, "[DEBUG]   call.arguments.data: 0x%p, length=%d\n", (void*)call.arguments.data, (int)call.arguments.data_length);
-  fprintf(stdout, "[DEBUG]   call.results.data: 0x%p, length=%d\n", (void*)call.results.data, (int)call.results.data_length);
-  
   // NOTE: any work here adds directly to the invocation time. Avoid doing too
   // much work or touching too many unlikely-to-be-cached structures (such as
   // walking the FlatBuffer, which may cause page faults).
@@ -824,17 +815,13 @@ static iree_status_t iree_vm_bytecode_module_begin_call(
   // Map the (potentially) export ordinal into the internal function ordinal in
   // the function descriptor table.
   iree_vm_bytecode_module_t* module = (iree_vm_bytecode_module_t*)self;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: mapping internal ordinal\n");
   uint16_t internal_ordinal = 0;
   iree_vm_FunctionSignatureDef_table_t signature_def = NULL;
   iree_status_t status = iree_vm_bytecode_map_internal_ordinal(
       module, call.function, &internal_ordinal, &signature_def);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: map_internal_ordinal failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: internal_ordinal=%d\n", (int)internal_ordinal);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: signature_def=0x%p\n", (void*)signature_def);
 
   call.function.linkage = IREE_VM_FUNCTION_LINKAGE_INTERNAL;
   call.function.ordinal = internal_ordinal;
@@ -848,36 +835,27 @@ static iree_status_t iree_vm_bytecode_module_begin_call(
   // into the noise. Similar to JNI, P/Invoke, etc you don't want to have
   // imports that cost less to execute than the marshaling overhead (dozens to
   // hundreds of instructions).
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: getting calling convention\n");
   flatbuffers_string_t calling_convention =
       signature_def
           ? iree_vm_FunctionSignatureDef_calling_convention(signature_def)
           : 0;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: calling_convention=0x%p\n", (void*)calling_convention);
   iree_vm_function_signature_t signature;
   memset(&signature, 0, sizeof(signature));
   signature.calling_convention.data = calling_convention;
   signature.calling_convention.size =
       flatbuffers_string_len(calling_convention);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: calling_convention.size=%d\n", (int)signature.calling_convention.size);
   iree_string_view_t cconv_arguments = iree_string_view_empty();
   iree_string_view_t cconv_results = iree_string_view_empty();
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: getting cconv fragments\n");
   status = iree_vm_function_call_get_cconv_fragments(
       &signature, &cconv_arguments, &cconv_results);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: get_cconv_fragments failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: cconv_arguments.size=%d\n", (int)cconv_arguments.size);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: cconv_results.size=%d\n", (int)cconv_results.size);
 
   // Jump into the dispatch routine to execute bytecode until the function
   // either returns (synchronous) or yields (asynchronous).
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: calling dispatch_begin\n");
   status = iree_vm_bytecode_dispatch_begin(stack, module, call, cconv_arguments,
                                          cconv_results);  // tail
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_begin_call: dispatch_begin returned, status=%d\n", (int)iree_status_code(status));
   return status;
 }
 
@@ -892,70 +870,52 @@ IREE_API_EXPORT iree_status_t iree_vm_bytecode_module_create(
     iree_vm_instance_t* instance, iree_const_byte_span_t archive_contents,
     iree_allocator_t archive_allocator, iree_allocator_t allocator,
     iree_vm_module_t** out_module) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: starting\n");
-  fprintf(stdout, "[DEBUG]   archive_contents size: %d bytes\n", (int)archive_contents.data_length);
   IREE_TRACE_ZONE_BEGIN(z0);
   IREE_ASSERT_ARGUMENT(out_module);
   *out_module = NULL;
 
   // Parse and verify the archive header to locate the FlatBuffer.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: parsing archive header\n");
   iree_const_byte_span_t flatbuffer_contents = iree_const_byte_span_empty();
   iree_host_size_t archive_rodata_offset = 0;
   IREE_RETURN_AND_END_ZONE_IF_ERROR(
       z0, iree_vm_bytecode_archive_parse_header(
               archive_contents, &flatbuffer_contents, &archive_rodata_offset));
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: archive header parsed, flatbuffer size: %d bytes, rodata_offset: %d\n", 
-          (int)flatbuffer_contents.data_length, (int)archive_rodata_offset);
 
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: verifying flatbuffer\n");
   IREE_TRACE_ZONE_BEGIN_NAMED(z1, "iree_vm_bytecode_module_flatbuffer_verify");
   iree_status_t status = iree_vm_bytecode_module_flatbuffer_verify(
       archive_contents, flatbuffer_contents, archive_rodata_offset);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: flatbuffer verification failed\n");
     IREE_TRACE_ZONE_END(z1);
     IREE_TRACE_ZONE_END(z0);
     return status;
   }
   IREE_TRACE_ZONE_END(z1);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: flatbuffer verified successfully\n");
 
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: getting module_def from flatbuffer\n");
   iree_vm_BytecodeModuleDef_table_t module_def =
       iree_vm_BytecodeModuleDef_as_root(flatbuffer_contents.data);
   if (!module_def) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: failed to get module_def\n");
     IREE_TRACE_ZONE_END(z0);
     return iree_make_status(
         IREE_STATUS_INVALID_ARGUMENT,
         "failed getting root from FlatBuffer; expected identifier "
         "'" iree_vm_BytecodeModuleDef_file_identifier "' not found");
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: module_def obtained\n");
 
   iree_vm_TypeDef_vec_t type_defs = iree_vm_BytecodeModuleDef_types(module_def);
   size_t type_table_size = iree_host_align(
       iree_vm_TypeDef_vec_len(type_defs) * sizeof(iree_vm_type_def_t), 16);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: type_count: %d, type_table_size: %d\n",
-          (int)iree_vm_TypeDef_vec_len(type_defs), (int)type_table_size);
 
   iree_host_size_t rodata_ref_count = iree_vm_RodataSegmentDef_vec_len(
       iree_vm_BytecodeModuleDef_rodata_segments(module_def));
   size_t rodata_ref_table_size =
       iree_host_align(rodata_ref_count * sizeof(iree_vm_buffer_t), 16);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: rodata_ref_count: %d, rodata_ref_table_size: %d\n",
-          (int)rodata_ref_count, (int)rodata_ref_table_size);
 
   iree_vm_bytecode_module_t* module = NULL;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: allocating module (total size: %d bytes)\n",
-          (int)(sizeof(iree_vm_bytecode_module_t) + type_table_size + rodata_ref_table_size));
   IREE_RETURN_AND_END_ZONE_IF_ERROR(
       z0,
       iree_allocator_malloc(
           allocator, sizeof(*module) + type_table_size + rodata_ref_table_size,
           (void**)&module));
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: module allocated\n");
   module->allocator = allocator;
 
   iree_vm_FunctionDescriptor_vec_t function_descriptors =
@@ -963,33 +923,24 @@ IREE_API_EXPORT iree_status_t iree_vm_bytecode_module_create(
   module->function_descriptor_count =
       iree_vm_FunctionDescriptor_vec_len(function_descriptors);
   module->function_descriptor_table = function_descriptors;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: function_descriptor_count: %d\n",
-          (int)module->function_descriptor_count);
 
   flatbuffers_uint8_vec_t bytecode_data =
       iree_vm_BytecodeModuleDef_bytecode_data(module_def);
   module->bytecode_data = iree_make_const_byte_span(
       bytecode_data, flatbuffers_uint8_vec_len(bytecode_data));
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: bytecode_data size: %d bytes\n",
-          (int)module->bytecode_data.data_length);
 
   module->archive_contents = archive_contents;
   module->archive_allocator = archive_allocator;
   module->def = module_def;
 
   module->type_count = iree_vm_TypeDef_vec_len(type_defs);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: resolving types\n");
   iree_status_t resolve_status = iree_vm_bytecode_module_resolve_types(
       instance, type_defs, module->type_table);
   if (!iree_status_is_ok(resolve_status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: type resolution failed\n");
     iree_allocator_free(allocator, module);
     IREE_TRACE_ZONE_END(z0);
     return resolve_status;
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: types resolved successfully\n");
-
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: initializing module interface\n");
   iree_vm_module_initialize(&module->interface, module);
   module->interface.destroy = iree_vm_bytecode_module_destroy;
   module->interface.name = iree_vm_bytecode_module_name;
@@ -1014,8 +965,6 @@ IREE_API_EXPORT iree_status_t iree_vm_bytecode_module_create(
   module->interface.resume_call = iree_vm_bytecode_module_resume_call;
 
   // Setup rodata segments to point directly at the FlatBuffer memory.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: setting up rodata segments (count: %d)\n",
-          (int)rodata_ref_count);
   module->rodata_ref_count = rodata_ref_count;
   module->rodata_ref_table =
       (iree_vm_buffer_t*)((uint8_t*)module + sizeof(*module) + type_table_size);
@@ -1031,8 +980,6 @@ IREE_API_EXPORT iree_status_t iree_vm_bytecode_module_create(
           (uint8_t*)iree_vm_RodataSegmentDef_embedded_data(segment),
           flatbuffers_uint8_vec_len(
               iree_vm_RodataSegmentDef_embedded_data(segment)));
-      fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: rodata segment %d: embedded, size: %d bytes\n",
-              i, (int)byte_span.data_length);
     } else {
       // Data is concatenated with the FlatBuffer at some relative offset.
       // Note that we've already verified the referenced range is in bounds.
@@ -1040,93 +987,31 @@ IREE_API_EXPORT iree_status_t iree_vm_bytecode_module_create(
           (uint8_t*)module->archive_contents.data + archive_rodata_offset +
               iree_vm_RodataSegmentDef_external_data_offset(segment),
           iree_vm_RodataSegmentDef_external_data_length(segment));
-      fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: rodata segment %d: external, size: %d bytes\n",
-              i, (int)byte_span.data_length);
     }
     iree_vm_buffer_t* ref = &module->rodata_ref_table[i];
     iree_vm_buffer_initialize(IREE_VM_BUFFER_ACCESS_ORIGIN_MODULE, byte_span,
                               iree_allocator_null(), ref);
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: rodata segments initialized\n");
 
   // Verify functions in the module now that we've verified the metadata that we
   // need to do so.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: verifying functions\n");
-  fprintf(stdout, "[DEBUG] ===== MODULE INFO BEFORE VERIFICATION =====\n");
-  fprintf(stdout, "[DEBUG]   module pointer: %p\n", (void*)module);
-  fprintf(stdout, "[DEBUG]   module pointer alignment: %d (0x%x)\n", 
-          (int)((uintptr_t)module % 16), (int)((uintptr_t)module % 16));
-  fprintf(stdout, "[DEBUG]   module size: %d bytes\n", (int)sizeof(iree_vm_bytecode_module_t));
-  fprintf(stdout, "[DEBUG]   function_descriptor_count: %d\n", (int)module->function_descriptor_count);
-  fprintf(stdout, "[DEBUG]   function_descriptor_table: %p\n", (void*)module->function_descriptor_table);
-  fprintf(stdout, "[DEBUG]   function_descriptor_table alignment: %d (0x%x)\n",
-          (int)((uintptr_t)module->function_descriptor_table % 16), 
-          (int)((uintptr_t)module->function_descriptor_table % 16));
-  fprintf(stdout, "[DEBUG]   bytecode_data.data: %p\n", (void*)module->bytecode_data.data);
-  fprintf(stdout, "[DEBUG]   bytecode_data.data_length: %d bytes\n", (int)module->bytecode_data.data_length);
-  fprintf(stdout, "[DEBUG]   bytecode_data alignment: %d (0x%x)\n",
-          (int)((uintptr_t)module->bytecode_data.data % 16), 
-          (int)((uintptr_t)module->bytecode_data.data % 16));
-  fprintf(stdout, "[DEBUG]   type_count: %d\n", (int)module->type_count);
-  fprintf(stdout, "[DEBUG]   type_table: %p\n", (void*)module->type_table);
-  fprintf(stdout, "[DEBUG]   type_table alignment: %d (0x%x)\n",
-          (int)((uintptr_t)module->type_table % 16), 
-          (int)((uintptr_t)module->type_table % 16));
-  fprintf(stdout, "[DEBUG]   rodata_ref_count: %d\n", (int)module->rodata_ref_count);
-  fprintf(stdout, "[DEBUG]   rodata_ref_table: %p\n", (void*)module->rodata_ref_table);
-  fprintf(stdout, "[DEBUG]   rodata_ref_table alignment: %d (0x%x)\n",
-          (int)((uintptr_t)module->rodata_ref_table % 16), 
-          (int)((uintptr_t)module->rodata_ref_table % 16));
-  fprintf(stdout, "[DEBUG]   archive_contents.data: %p\n", (void*)module->archive_contents.data);
-  fprintf(stdout, "[DEBUG]   archive_contents.data_length: %d bytes\n", (int)module->archive_contents.data_length);
-  fprintf(stdout, "[DEBUG]   def (FlatBuffer table): %p\n", (void*)module->def);
-  fprintf(stdout, "[DEBUG]   interface pointer: %p\n", (void*)&module->interface);
-  fprintf(stdout, "[DEBUG]   allocator: %p\n", (void*)module->allocator.ctl);
-  fprintf(stdout, "[DEBUG] ===========================================\n");
   iree_status_t verify_status = iree_ok_status();
 #if IREE_VM_BYTECODE_VERIFICATION_ENABLE
   for (uint16_t i = 0; i < module->function_descriptor_count; ++i) {
-    fprintf(stdout, "[DEBUG] --- Verifying function %d of %d ---\n", i, (int)module->function_descriptor_count);
-    const iree_vm_FunctionDescriptor_t* func_desc = &module->function_descriptor_table[i];
-    fprintf(stdout, "[DEBUG]   function_descriptor_table[%d] pointer: %p\n", i, (void*)func_desc);
-    fprintf(stdout, "[DEBUG]   function_descriptor_table[%d] alignment: %d (0x%x)\n", 
-            i, (int)((uintptr_t)func_desc % 16), (int)((uintptr_t)func_desc % 16));
-    fprintf(stdout, "[DEBUG]   function_descriptor_table base: %p\n", (void*)module->function_descriptor_table);
-    fprintf(stdout, "[DEBUG]   function_descriptor_table base alignment: %d (0x%x)\n",
-            (int)((uintptr_t)module->function_descriptor_table % 16),
-            (int)((uintptr_t)module->function_descriptor_table % 16));
-    fprintf(stdout, "[DEBUG]   bytecode_data.data: %p\n", (void*)module->bytecode_data.data);
-    fprintf(stdout, "[DEBUG]   bytecode_data.data_length: %d bytes\n", (int)module->bytecode_data.data_length);
-    fprintf(stdout, "[DEBUG]   bytecode_data alignment: %d (0x%x)\n",
-            (int)((uintptr_t)module->bytecode_data.data % 16),
-            (int)((uintptr_t)module->bytecode_data.data % 16));
-    fprintf(stdout, "[DEBUG]   module pointer: %p\n", (void*)module);
-    fprintf(stdout, "[DEBUG]   module alignment: %d (0x%x)\n",
-            (int)((uintptr_t)module % 16), (int)((uintptr_t)module % 16));
     IREE_TRACE_ZONE_BEGIN_NAMED(z1, "iree_vm_bytecode_function_verify");
-    fprintf(stdout, "[DEBUG]   Calling iree_vm_bytecode_function_verify for function %d...\n", i);
     verify_status = iree_vm_bytecode_function_verify(module, i, allocator);
     IREE_TRACE_ZONE_END(z1);
     if (!iree_status_is_ok(verify_status)) {
-      fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: function %d verification failed with status %d\n", 
-              i, (int)iree_status_code(verify_status));
       break;
-    } else {
-      fprintf(stdout, "[DEBUG]   Function %d verification passed\n", i);
     }
   }
-#else
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: bytecode verification disabled\n");
 #endif  // IREE_VM_BYTECODE_VERIFICATION_ENABLE
   if (iree_status_is_ok(verify_status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: all verifications passed, setting out_module\n");
     *out_module = &module->interface;
   } else {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: verification failed, freeing module\n");
     iree_allocator_free(allocator, module);
   }
 
   IREE_TRACE_ZONE_END(z0);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_module_create: completed with status %d\n", (int)iree_status_code(verify_status));
   return verify_status;
 }

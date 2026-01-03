@@ -298,11 +298,8 @@ static inline const iree_vm_register_list_t* VM_DecVariadicOperandsImpl(
 #define DISPATCH_OP(ext, op_name, body)                               \
   _dispatch_##ext##_##op_name :;                                      \
   {                                                                    \
-    iree_vm_source_offset_t op_pc = pc - 1;                            \
-    fprintf(stdout, "[DEBUG] DISPATCH_OP: %s_%s at pc=%d (opcode=0x%02X)\n", #ext, #op_name, (int)op_pc, (unsigned char)bytecode_data[op_pc]); \
     IREE_DISPATCH_TRACE_INSTRUCTION(IREE_VM_PC_OFFSET_##ext, #op_name); \
     body;                                                               \
-    fprintf(stdout, "[DEBUG] DISPATCH_OP: %s_%s completed, next pc=%d (next_opcode=0x%02X)\n", #ext, #op_name, (int)pc, (unsigned char)bytecode_data[pc]); \
   }                                                                    \
   goto* kDispatchTable_CORE[bytecode_data[pc++]];
 
@@ -341,11 +338,8 @@ static inline const iree_vm_register_list_t* VM_DecVariadicOperandsImpl(
 #define DISPATCH_OP(ext, op_name, body)                                 \
   case IREE_VM_OP_##ext##_##op_name: {                                  \
     {                                                                    \
-      iree_vm_source_offset_t op_pc = pc - 1;                            \
-      fprintf(stdout, "[DEBUG] DISPATCH_OP: %s_%s at pc=%d (opcode=0x%02X)\n", #ext, #op_name, (int)op_pc, (unsigned char)bytecode_data[op_pc]); \
       IREE_DISPATCH_TRACE_INSTRUCTION(IREE_VM_PC_OFFSET_##ext, #op_name); \
       body;                                                               \
-      fprintf(stdout, "[DEBUG] DISPATCH_OP: %s_%s completed, next pc=%d (next_opcode=0x%02X)\n", #ext, #op_name, (int)pc, (unsigned char)bytecode_data[pc]); \
     }                                                                    \
   } break;
 

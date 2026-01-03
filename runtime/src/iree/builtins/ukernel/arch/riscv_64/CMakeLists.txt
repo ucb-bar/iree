@@ -10,6 +10,9 @@
 
 iree_add_all_subdirs()
 
+include(CheckCXXCompilerFlag)
+include(CheckCSourceCompiles)
+
 iree_compiler_targeting_iree_arch(_IREE_UKERNEL_BITCODE_BUILD_RISCV_64 "riscv_64")
 if(_IREE_UKERNEL_BITCODE_BUILD_RISCV_64)
 
@@ -110,9 +113,6 @@ endif()  # _IREE_UKERNEL_BITCODE_BUILD_RISCV_64
 if (NOT (IREE_ARCH STREQUAL "riscv_64"))
   return()
 endif()
-
-include(CheckCXXCompilerFlag)
-include(CheckCSourceCompiles)
 
 iree_select_compiler_opts(IREE_UK_COPTS_RISCV_64_V
   CLANG_OR_GCC

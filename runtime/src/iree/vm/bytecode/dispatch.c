@@ -97,24 +97,14 @@ static iree_status_t iree_vm_bytecode_function_enter(
     iree_string_view_t cconv_results,
     iree_vm_stack_frame_t* IREE_RESTRICT* out_callee_frame,
     iree_vm_registers_t* out_callee_registers) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: starting\n");
-  fprintf(stdout, "[DEBUG]   stack: 0x%p\n", (void*)stack);
-  fprintf(stdout, "[DEBUG]   function.module: 0x%p\n", (void*)function.module);
-  fprintf(stdout, "[DEBUG]   function.ordinal: %d\n", (int)function.ordinal);
-  fprintf(stdout, "[DEBUG]   cconv_results.size: %d\n", (int)cconv_results.size);
-  
   iree_vm_bytecode_module_t* module =
       (iree_vm_bytecode_module_t*)function.module->self;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: module=0x%p, function_descriptor_count=%d\n", 
-          (void*)module, (int)module->function_descriptor_count);
   if (IREE_UNLIKELY(function.ordinal >= module->function_descriptor_count)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: ordinal out of range\n");
     return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                             "import ordinal out of range");
   }
   const iree_vm_FunctionDescriptor_t* target_descriptor =
       &module->function_descriptor_table[function.ordinal];
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: target_descriptor=0x%p\n", (void*)target_descriptor);
 
   // We first compute the frame size of the callee and the masks we'll use to
   // bounds check register access. This lets us allocate the entire frame
@@ -123,8 +113,6 @@ static iree_status_t iree_vm_bytecode_function_enter(
   // We've verified all register storage prior to execution.
   uint32_t i32_register_count = target_descriptor->i32_register_count;
   uint32_t ref_register_count = target_descriptor->ref_register_count;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: i32_register_count=%d, ref_register_count=%d\n", 
-          (int)i32_register_count, (int)ref_register_count);
   IREE_ASSERT_LE(i32_register_count, IREE_I32_REGISTER_MASK);
   IREE_ASSERT_LE(ref_register_count, IREE_REF_REGISTER_MASK);
 
@@ -139,25 +127,19 @@ static iree_status_t iree_vm_bytecode_function_enter(
       iree_host_align(ref_register_count * sizeof(iree_vm_ref_t), 16);
   iree_host_size_t frame_size =
       header_size + i32_register_size + ref_register_size;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: header_size=%d, i32_register_size=%d, ref_register_size=%d, frame_size=%d\n",
-          (int)header_size, (int)i32_register_size, (int)ref_register_size, (int)frame_size);
 
   // Enter function and allocate stack frame storage.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: calling stack_function_enter\n");
   iree_status_t status = iree_vm_stack_function_enter(
       stack, &function, IREE_VM_STACK_FRAME_BYTECODE, frame_size,
       iree_vm_bytecode_stack_frame_cleanup, out_callee_frame);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: stack_function_enter failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: stack_function_enter succeeded, out_callee_frame=0x%p\n", (void*)*out_callee_frame);
 
   // Stash metadata and compute register pointers.
   iree_vm_bytecode_frame_storage_t* stack_storage =
       (iree_vm_bytecode_frame_storage_t*)iree_vm_stack_frame_storage(
           *out_callee_frame);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: stack_storage=0x%p\n", (void*)stack_storage);
   stack_storage->cconv_results = cconv_results;
   stack_storage->i32_register_count = i32_register_count;
   stack_storage->i32_register_offset = header_size;
@@ -165,9 +147,6 @@ static iree_status_t iree_vm_bytecode_function_enter(
   stack_storage->ref_register_offset = header_size + i32_register_size;
   *out_callee_registers =
       iree_vm_bytecode_get_register_storage(*out_callee_frame);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: out_callee_registers.i32=0x%p, out_callee_registers.ref=0x%p\n",
-          (void*)(*out_callee_registers).i32, (void*)(*out_callee_registers).ref);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_enter: completed successfully\n");
   return iree_ok_status();
 }
 
@@ -184,62 +163,40 @@ static iree_status_t iree_vm_bytecode_external_enter(
     iree_string_view_t cconv_results,
     iree_vm_stack_frame_t* IREE_RESTRICT* out_callee_frame,
     iree_vm_registers_t* out_callee_registers) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: starting\n");
-  fprintf(stdout, "[DEBUG]   stack: 0x%p\n", (void*)stack);
-  fprintf(stdout, "[DEBUG]   function.ordinal: %d\n", (int)function.ordinal);
-  fprintf(stdout, "[DEBUG]   cconv_arguments.size: %d\n", (int)cconv_arguments.size);
-  fprintf(stdout, "[DEBUG]   arguments.data: 0x%p, length=%d\n", (void*)arguments.data, (int)arguments.data_length);
-  fprintf(stdout, "[DEBUG]   cconv_results.size: %d\n", (int)cconv_results.size);
-  
   // Enter the bytecode function and allocate registers.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: calling function_enter\n");
   iree_status_t status = iree_vm_bytecode_function_enter(
       stack, function, cconv_results, out_callee_frame, out_callee_registers);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: function_enter failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: function_enter succeeded\n");
-  fprintf(stdout, "[DEBUG]   out_callee_frame: 0x%p\n", (void*)*out_callee_frame);
-  fprintf(stdout, "[DEBUG]   out_callee_registers.i32: 0x%p\n", (void*)(*out_callee_registers).i32);
-  fprintf(stdout, "[DEBUG]   out_callee_registers.ref: 0x%p\n", (void*)(*out_callee_registers).ref);
 
   // Marshal arguments from the ABI format to the VM registers.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: marshaling arguments\n");
   iree_vm_registers_t callee_registers = *out_callee_registers;
   uint16_t i32_reg = 0;
   uint16_t ref_reg = 0;
   const uint8_t* p = arguments.data;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: starting loop, p=0x%p\n", (void*)p);
   for (iree_host_size_t i = 0; i < cconv_arguments.size; ++i) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: loop iteration %d, cconv_type=0x%02X\n", (int)i, (unsigned char)cconv_arguments.data[i]);
     switch (cconv_arguments.data[i]) {
       case IREE_VM_CCONV_TYPE_VOID:
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: VOID\n");
         break;
       case IREE_VM_CCONV_TYPE_I32:
       case IREE_VM_CCONV_TYPE_F32: {
         uint16_t dst_reg = i32_reg++;
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: I32/F32, dst_reg=%d, p=0x%p\n", (int)dst_reg, (void*)p);
         const uint8_t* src = (const uint8_t*)p;
         uint8_t* dst = (uint8_t*)&callee_registers.i32[dst_reg];
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: copying 4 bytes from 0x%p to 0x%p\n", (void*)src, (void*)dst);
         dst[0] = src[0];
         dst[1] = src[1];
         dst[2] = src[2];
         dst[3] = src[3];
         p += sizeof(int32_t);
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: copied, new p=0x%p\n", (void*)p);
       } break;
       case IREE_VM_CCONV_TYPE_I64:
       case IREE_VM_CCONV_TYPE_F64: {
         i32_reg = iree_host_align(i32_reg, 2);  // ensure aligned
         uint16_t dst_reg = i32_reg;
         i32_reg += 2;
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: I64/F64, dst_reg=%d, p=0x%p\n", (int)dst_reg, (void*)p);
         const uint8_t* src = (const uint8_t*)p;
         uint8_t* dst = (uint8_t*)&callee_registers.i32[dst_reg];
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: copying 8 bytes from 0x%p to 0x%p\n", (void*)src, (void*)dst);
         dst[0] = src[0];
         dst[1] = src[1];
         dst[2] = src[2];
@@ -249,21 +206,16 @@ static iree_status_t iree_vm_bytecode_external_enter(
         dst[6] = src[6];
         dst[7] = src[7];
         p += sizeof(int64_t);
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: copied, new p=0x%p\n", (void*)p);
       } break;
       case IREE_VM_CCONV_TYPE_REF: {
         uint16_t dst_reg = ref_reg++;
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: REF, dst_reg=%d, p=0x%p\n", (int)dst_reg, (void*)p);
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: calling ref_retain\n");
         iree_vm_ref_retain(
             (iree_vm_ref_t*)p,
             &callee_registers.ref[dst_reg & IREE_REF_REGISTER_MASK]);
         p += sizeof(iree_vm_ref_t);
-        fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: ref_retain completed, new p=0x%p\n", (void*)p);
       } break;
     }
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_external_enter: completed successfully\n");
   return iree_ok_status();
 }
 
@@ -450,49 +402,24 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
     const iree_vm_register_list_t* IREE_RESTRICT segment_size_list,
     const iree_vm_register_list_t* IREE_RESTRICT src_reg_list,
     iree_byte_span_t storage) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_populate_import_cconv_arguments: starting\n");
-  fprintf(stdout, "[DEBUG]   cconv_arguments.data: 0x%p\n", (void*)cconv_arguments.data);
-  fprintf(stdout, "[DEBUG]   cconv_arguments.size: %d\n", (int)cconv_arguments.size);
-  fprintf(stdout, "[DEBUG]   caller_registers.i32: 0x%p\n", (void*)caller_registers.i32);
-  fprintf(stdout, "[DEBUG]   caller_registers.ref: 0x%p\n", (void*)caller_registers.ref);
-  fprintf(stdout, "[DEBUG]   segment_size_list: 0x%p\n", (void*)segment_size_list);
-  fprintf(stdout, "[DEBUG]   src_reg_list: 0x%p\n", (void*)src_reg_list);
-  if (src_reg_list) {
-    fprintf(stdout, "[DEBUG]   src_reg_list->size: %d\n", (int)src_reg_list->size);
-  }
-  fprintf(stdout, "[DEBUG]   storage.data: 0x%p\n", (void*)storage.data);
-  fprintf(stdout, "[DEBUG]   storage.data_length: %d\n", (int)storage.data_length);
   uint8_t* IREE_RESTRICT p = storage.data;
   for (iree_host_size_t i = 0, seg_i = 0, reg_i = 0; i < cconv_arguments.size;
        ++i, ++seg_i) {
-    fprintf(stdout, "[DEBUG]   loop i=%d, seg_i=%d, reg_i=%d, cconv_char='%c' (0x%02X)\n", 
-            (int)i, (int)seg_i, (int)reg_i, 
-            (cconv_arguments.data[i] >= 32 && cconv_arguments.data[i] < 127) ? cconv_arguments.data[i] : '?',
-            (unsigned char)cconv_arguments.data[i]);
     switch (cconv_arguments.data[i]) {
       case IREE_VM_CCONV_TYPE_VOID:
         break;
       case IREE_VM_CCONV_TYPE_I32:
       case IREE_VM_CCONV_TYPE_F32: {
-        uint16_t src_reg_idx = src_reg_list->registers[reg_i];
-        fprintf(stdout, "[DEBUG]     I32/F32: src_reg_idx=%d, src_addr=0x%p, dst_addr=0x%p\n",
-                (int)src_reg_idx, (void*)&caller_registers.i32[src_reg_idx], (void*)p);
         const uint8_t* src = (const uint8_t*)&caller_registers.i32[src_reg_list->registers[reg_i++]];
         uint8_t* dst = (uint8_t*)p;
         dst[0] = src[0];
         dst[1] = src[1];
         dst[2] = src[2];
         dst[3] = src[3];
-        fprintf(stdout, "[DEBUG]     copied value: 0x%02X%02X%02X%02X\n",
-                (unsigned char)dst[3], (unsigned char)dst[2], 
-                (unsigned char)dst[1], (unsigned char)dst[0]);
         p += sizeof(int32_t);
       } break;
       case IREE_VM_CCONV_TYPE_I64:
       case IREE_VM_CCONV_TYPE_F64: {
-        uint16_t src_reg_idx = src_reg_list->registers[reg_i];
-        fprintf(stdout, "[DEBUG]     I64/F64: src_reg_idx=%d, src_addr=0x%p, dst_addr=0x%p\n",
-                (int)src_reg_idx, (void*)&caller_registers.i32[src_reg_idx], (void*)p);
         const uint8_t* src = (const uint8_t*)&caller_registers.i32[src_reg_list->registers[reg_i++]];
         uint8_t* dst = (uint8_t*)p;
         dst[0] = src[0];
@@ -503,27 +430,18 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
         dst[5] = src[5];
         dst[6] = src[6];
         dst[7] = src[7];
-        fprintf(stdout, "[DEBUG]     copied value: 0x%02X%02X%02X%02X%02X%02X%02X%02X\n",
-                (unsigned char)dst[7], (unsigned char)dst[6], (unsigned char)dst[5], (unsigned char)dst[4],
-                (unsigned char)dst[3], (unsigned char)dst[2], (unsigned char)dst[1], (unsigned char)dst[0]);
         p += sizeof(int64_t);
       } break;
       case IREE_VM_CCONV_TYPE_REF: {
-        uint16_t src_reg = src_reg_list->registers[reg_i];
-        fprintf(stdout, "[DEBUG]     REF: src_reg=%d (masked=%d), src_addr=0x%p, dst_addr=0x%p\n",
-                (int)src_reg, (int)(src_reg & IREE_REF_REGISTER_MASK),
-                (void*)&caller_registers.ref[src_reg & IREE_REF_REGISTER_MASK], (void*)p);
+        uint16_t src_reg = src_reg_list->registers[reg_i++];
         iree_vm_ref_assign(
             &caller_registers.ref[src_reg & IREE_REF_REGISTER_MASK],
             (iree_vm_ref_t*)p);  // safe unaligned
         p += sizeof(iree_vm_ref_t);
-        reg_i++;
       } break;
       case IREE_VM_CCONV_TYPE_SPAN_START: {
         IREE_ASSERT(segment_size_list);
         int32_t span_count = segment_size_list->registers[seg_i];
-        fprintf(stdout, "[DEBUG]     SPAN_START: seg_i=%d, span_count=%d, dst_addr=0x%p\n",
-                (int)seg_i, (int)span_count, (void*)p);
         const uint8_t* src = (const uint8_t*)&span_count;
         uint8_t* dst = (uint8_t*)p;
         dst[0] = src[0];
@@ -532,7 +450,6 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
         dst[3] = src[3];
         p += sizeof(int32_t);
         if (!span_count) {
-          fprintf(stdout, "[DEBUG]     SPAN_START: empty span, skipping to SPAN_END\n");
           // No items; skip the span.
           do {
             ++i;
@@ -541,10 +458,7 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
           continue;
         }
         iree_host_size_t span_start_i = i + 1;
-        fprintf(stdout, "[DEBUG]     SPAN_START: processing %d items, span_start_i=%d\n",
-                (int)span_count, (int)span_start_i);
         for (int32_t j = 0; j < span_count; ++j) {
-          fprintf(stdout, "[DEBUG]       SPAN item j=%d\n", (int)j);
           for (i = span_start_i;
                i < cconv_arguments.size &&
                cconv_arguments.data[i] != IREE_VM_CCONV_TYPE_SPAN_END;
@@ -555,9 +469,6 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
                 break;
               case IREE_VM_CCONV_TYPE_I32:
               case IREE_VM_CCONV_TYPE_F32: {
-                uint16_t src_reg_idx = src_reg_list->registers[reg_i];
-                fprintf(stdout, "[DEBUG]         SPAN I32/F32: src_reg_idx=%d, src_addr=0x%p, dst_addr=0x%p\n",
-                        (int)src_reg_idx, (void*)&caller_registers.i32[src_reg_idx], (void*)p);
                 const uint8_t* src = (const uint8_t*)&caller_registers.i32[src_reg_list->registers[reg_i++]];
                 uint8_t* dst = (uint8_t*)p;
                 dst[0] = src[0];
@@ -568,9 +479,6 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
               } break;
               case IREE_VM_CCONV_TYPE_I64:
               case IREE_VM_CCONV_TYPE_F64: {
-                uint16_t src_reg_idx = src_reg_list->registers[reg_i];
-                fprintf(stdout, "[DEBUG]         SPAN I64/F64: src_reg_idx=%d, src_addr=0x%p, dst_addr=0x%p\n",
-                        (int)src_reg_idx, (void*)&caller_registers.i32[src_reg_idx], (void*)p);
                 const uint8_t* src = (const uint8_t*)&caller_registers.i32[src_reg_list->registers[reg_i++]];
                 uint8_t* dst = (uint8_t*)p;
                 dst[0] = src[0];
@@ -584,25 +492,18 @@ static void iree_vm_bytecode_populate_import_cconv_arguments(
                 p += sizeof(int64_t);
               } break;
               case IREE_VM_CCONV_TYPE_REF: {
-                uint16_t src_reg = src_reg_list->registers[reg_i];
-                fprintf(stdout, "[DEBUG]         SPAN REF: src_reg=%d (masked=%d), src_addr=0x%p, dst_addr=0x%p\n",
-                        (int)src_reg, (int)(src_reg & IREE_REF_REGISTER_MASK),
-                        (void*)&caller_registers.ref[src_reg & IREE_REF_REGISTER_MASK], (void*)p);
+                uint16_t src_reg = src_reg_list->registers[reg_i++];
                 iree_vm_ref_assign(
                     &caller_registers.ref[src_reg & IREE_REF_REGISTER_MASK],
                     (iree_vm_ref_t*)p);  // safe unaligned
                 p += sizeof(iree_vm_ref_t);
-                reg_i++;
               } break;
             }
           }
         }
-        fprintf(stdout, "[DEBUG]     SPAN_START: completed, final i=%d\n", (int)i);
       } break;
     }
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_populate_import_cconv_arguments: completed, final p=0x%p (offset=%d)\n",
-          (void*)p, (int)(p - storage.data));
 }
 
 // Issues a populated import call and marshals the results into |dst_reg_list|.
@@ -760,89 +661,40 @@ static iree_status_t iree_vm_bytecode_call_import_variadic(
     const iree_vm_register_list_t* IREE_RESTRICT dst_reg_list,
     iree_vm_stack_frame_t* IREE_RESTRICT* out_caller_frame,
     iree_vm_registers_t* out_caller_registers) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: starting\n");
-  fprintf(stdout, "[DEBUG]   stack: 0x%p\n", (void*)stack);
-  fprintf(stdout, "[DEBUG]   module_state: 0x%p\n", (void*)module_state);
-  fprintf(stdout, "[DEBUG]   import_ordinal: %u (0x%08X)\n", (unsigned int)import_ordinal, (unsigned int)import_ordinal);
-  fprintf(stdout, "[DEBUG]   caller_registers.i32: 0x%p\n", (void*)caller_registers.i32);
-  fprintf(stdout, "[DEBUG]   caller_registers.ref: 0x%p\n", (void*)caller_registers.ref);
-  fprintf(stdout, "[DEBUG]   segment_size_list: 0x%p\n", (void*)segment_size_list);
-  if (segment_size_list) {
-    fprintf(stdout, "[DEBUG]     segment_size_list->size=%d\n", (int)segment_size_list->size);
-  }
-  fprintf(stdout, "[DEBUG]   src_reg_list: 0x%p\n", (void*)src_reg_list);
-  if (src_reg_list) {
-    fprintf(stdout, "[DEBUG]     src_reg_list->size=%d\n", (int)src_reg_list->size);
-  }
-  fprintf(stdout, "[DEBUG]   dst_reg_list: 0x%p\n", (void*)dst_reg_list);
-  if (dst_reg_list) {
-    fprintf(stdout, "[DEBUG]     dst_reg_list->size=%d\n", (int)dst_reg_list->size);
-  }
-  fprintf(stdout, "[DEBUG]   out_caller_frame: 0x%p\n", (void*)out_caller_frame);
-  fprintf(stdout, "[DEBUG]   out_caller_registers: 0x%p\n", (void*)out_caller_registers);
-  
   // Prepare |call| by looking up the import information.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: verifying import\n");
   const iree_vm_bytecode_import_t* import = NULL;
   iree_status_t status = iree_vm_bytecode_verify_import(stack, module_state,
                                                       import_ordinal, &import);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: verify_import failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG]   import: 0x%p\n", (void*)import);
-  fprintf(stdout, "[DEBUG]   import->function.module: 0x%p\n", (void*)import->function.module);
-  fprintf(stdout, "[DEBUG]   import->function.ordinal: %d\n", (int)import->function.ordinal);
 
   iree_vm_function_call_t call;
   memset(&call, 0, sizeof(call));
   call.function = import->function;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: call.function set\n");
 
   // Allocate ABI argument/result storage taking into account the variadic
   // segments.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: computing cconv fragment size\n");
-  fprintf(stdout, "[DEBUG]   import->arguments.data: 0x%p\n", (void*)import->arguments.data);
-  fprintf(stdout, "[DEBUG]   import->arguments.size: %d\n", (int)import->arguments.size);
   status = iree_vm_function_call_compute_cconv_fragment_size(
       import->arguments, segment_size_list, &call.arguments.data_length);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: compute_cconv_fragment_size failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG]   call.arguments.data_length=%d\n", (int)call.arguments.data_length);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: allocating arguments buffer\n");
   call.arguments.data = iree_alloca(call.arguments.data_length);
-  fprintf(stdout, "[DEBUG]   call.arguments.data=0x%p\n", (void*)call.arguments.data);
   memset(call.arguments.data, 0, call.arguments.data_length);
 
   // Marshal inputs from registers to the ABI arguments buffer.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: populating cconv arguments\n");
   iree_vm_bytecode_populate_import_cconv_arguments(
       import->arguments, caller_registers, segment_size_list, src_reg_list,
       call.arguments);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: cconv arguments populated\n");
 
   // Issue the call and handle results.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: preparing results buffer\n");
-  fprintf(stdout, "[DEBUG]   import->result_buffer_size=%d\n", (int)import->result_buffer_size);
   call.results.data_length = import->result_buffer_size;
   call.results.data = iree_alloca(call.results.data_length);
-  fprintf(stdout, "[DEBUG]   call.results.data=0x%p\n", (void*)call.results.data);
   memset(call.results.data, 0, call.results.data_length);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: calling issue_import_call\n");
   status = iree_vm_bytecode_issue_import_call(stack, call, import->results,
                                             dst_reg_list, out_caller_frame,
                                             out_caller_registers);
-  if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: issue_import_call failed, status=%d\n", (int)iree_status_code(status));
-    return status;
-  }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: issue_import_call succeeded\n");
-  fprintf(stdout, "[DEBUG]   *out_caller_frame: 0x%p\n", (void*)*out_caller_frame);
-  fprintf(stdout, "[DEBUG]   out_caller_registers->i32: 0x%p\n", (void*)out_caller_registers->i32);
-  fprintf(stdout, "[DEBUG]   out_caller_registers->ref: 0x%p\n", (void*)out_caller_registers->ref);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_call_import_variadic: completed successfully\n");
   return status;
 }
 
@@ -859,39 +711,21 @@ iree_status_t iree_vm_bytecode_dispatch_begin(
     iree_vm_stack_t* stack, iree_vm_bytecode_module_t* module,
     const iree_vm_function_call_t call, iree_string_view_t cconv_arguments,
     iree_string_view_t cconv_results) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: starting\n");
-  fprintf(stdout, "[DEBUG]   stack: 0x%p\n", (void*)stack);
-  fprintf(stdout, "[DEBUG]   module: 0x%p\n", (void*)module);
-  fprintf(stdout, "[DEBUG]   call.function.ordinal: %d\n", (int)call.function.ordinal);
-  fprintf(stdout, "[DEBUG]   cconv_arguments.size: %d\n", (int)cconv_arguments.size);
-  fprintf(stdout, "[DEBUG]   cconv_results.size: %d\n", (int)cconv_results.size);
-  fprintf(stdout, "[DEBUG]   call.arguments.data: 0x%p, length=%d\n", (void*)call.arguments.data, (int)call.arguments.data_length);
-  fprintf(stdout, "[DEBUG]   call.results.data: 0x%p, length=%d\n", (void*)call.results.data, (int)call.results.data_length);
-  
   // Enter function (as this is the initial call).
   // The callee's return will take care of storing the output registers when it
   // actually does return, either immediately or in the future via a resume.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: calling external_enter\n");
   iree_vm_stack_frame_t* current_frame = NULL;
   iree_vm_registers_t regs;
   iree_status_t status = iree_vm_bytecode_external_enter(
       stack, call.function, cconv_arguments, call.arguments, cconv_results,
       &current_frame, &regs);
   if (!iree_status_is_ok(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: external_enter failed, status=%d\n", (int)iree_status_code(status));
     return status;
   }
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: external_enter succeeded\n");
-  fprintf(stdout, "[DEBUG]   current_frame: 0x%p\n", (void*)current_frame);
-  fprintf(stdout, "[DEBUG]   regs.i32: 0x%p\n", (void*)regs.i32);
-  fprintf(stdout, "[DEBUG]   regs.ref: 0x%p\n", (void*)regs.ref);
 
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: calling dispatch\n");
   status = iree_vm_bytecode_dispatch(stack, module, current_frame,
                                                    regs, call.results);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: dispatch returned, status=%d\n", (int)iree_status_code(status));
   if (!iree_status_is_ok(status) && !iree_status_is_deferred(status)) {
-    fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch_begin: dispatch failed, leaving stack frame\n");
     // Balance the external_enter on failure.
     IREE_IGNORE_ERROR(iree_vm_stack_function_leave(stack));
   }
@@ -919,19 +753,9 @@ static iree_status_t iree_vm_bytecode_dispatch(
     iree_vm_bytecode_module_t* IREE_RESTRICT module,
     iree_vm_stack_frame_t* IREE_RESTRICT current_frame,
     iree_vm_registers_t regs, iree_byte_span_t call_results) {
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: starting\n");
-  fprintf(stdout, "[DEBUG]   stack: 0x%p\n", (void*)stack);
-  fprintf(stdout, "[DEBUG]   module: 0x%p\n", (void*)module);
-  fprintf(stdout, "[DEBUG]   current_frame: 0x%p\n", (void*)current_frame);
-  fprintf(stdout, "[DEBUG]   regs.i32: 0x%p\n", (void*)regs.i32);
-  fprintf(stdout, "[DEBUG]   regs.ref: 0x%p\n", (void*)regs.ref);
-  fprintf(stdout, "[DEBUG]   call_results.data: 0x%p, length=%d\n", (void*)call_results.data, (int)call_results.data_length);
-  
   // When required emit the dispatch tables here referencing the labels we are
   // defining below.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: defining dispatch tables\n");
   DEFINE_DISPATCH_TABLES();
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: dispatch tables defined\n");
 
   // Primary dispatch state. This is our 'native stack frame' and really
   // just enough to make dereferencing common addresses (like the current
@@ -940,37 +764,20 @@ static iree_status_t iree_vm_bytecode_dispatch(
   // The hope is that the compiler decides to keep these in registers (as
   // they are touched for every instruction executed). The frame will change
   // as we call into different functions.
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: getting module_state\n");
-  fprintf(stdout, "[DEBUG]   current_frame->module_state: 0x%p\n", (void*)current_frame->module_state);
   const iree_vm_bytecode_module_state_t* IREE_RESTRICT module_state =
       (iree_vm_bytecode_module_state_t*)current_frame->module_state;
-  fprintf(stdout, "[DEBUG]   module_state: 0x%p\n", (void*)module_state);
   
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: getting bytecode_data\n");
-  fprintf(stdout, "[DEBUG]   current_frame->function.ordinal: %d\n", (int)current_frame->function.ordinal);
-  fprintf(stdout, "[DEBUG]   module->function_descriptor_table: 0x%p\n", (void*)module->function_descriptor_table);
-  fprintf(stdout, "[DEBUG]   module->bytecode_data.data: 0x%p\n", (void*)module->bytecode_data.data);
-  fprintf(stdout, "[DEBUG]   module->bytecode_data.data_length: %d\n", (int)module->bytecode_data.data_length);
   const uint8_t* IREE_RESTRICT bytecode_data =
       module->bytecode_data.data +
       module->function_descriptor_table[current_frame->function.ordinal]
           .bytecode_offset;
-  fprintf(stdout, "[DEBUG]   function_descriptor.bytecode_offset: %d\n", 
-          (int)module->function_descriptor_table[current_frame->function.ordinal].bytecode_offset);
-  fprintf(stdout, "[DEBUG]   bytecode_data: 0x%p\n", (void*)bytecode_data);
 
   int32_t* IREE_RESTRICT regs_i32 = regs.i32;
   IREE_BUILTIN_ASSUME_ALIGNED(regs_i32, 16);
   iree_vm_ref_t* IREE_RESTRICT regs_ref = regs.ref;
   IREE_BUILTIN_ASSUME_ALIGNED(regs_ref, 16);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: registers set up\n");
-  fprintf(stdout, "[DEBUG]   regs_i32: 0x%p\n", (void*)regs_i32);
-  fprintf(stdout, "[DEBUG]   regs_ref: 0x%p\n", (void*)regs_ref);
 
   iree_vm_source_offset_t pc = current_frame->pc;
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: initial pc=%d\n", (int)pc);
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: entering dispatch loop\n");
-  fprintf(stdout, "[DEBUG] iree_vm_bytecode_dispatch: first opcode at pc=%d: 0x%02X\n", (int)pc, (unsigned char)bytecode_data[pc]);
   BEGIN_DISPATCH_CORE() {
     //===------------------------------------------------------------------===//
     // Globals
@@ -2003,90 +1810,42 @@ static iree_status_t iree_vm_bytecode_dispatch(
     });
 
     DISPATCH_OP(CORE, CallVariadic, {
-      fprintf(stdout, "[DEBUG] CallVariadic: starting\n");
-      fprintf(stdout, "[DEBUG]   pc=%d\n", (int)pc);
-      
       // TODO(benvanik): dedupe with above or merge and always have the seg size
       // list be present (but empty) for non-variadic calls.
-      fprintf(stdout, "[DEBUG] CallVariadic: decoding function_ordinal\n");
       int32_t function_ordinal = VM_DecFuncAttr("callee");
-      fprintf(stdout, "[DEBUG]   function_ordinal=%d (0x%08X)\n", (int)function_ordinal, (unsigned int)function_ordinal);
-      
-      fprintf(stdout, "[DEBUG] CallVariadic: decoding segment_size_list\n");
       const iree_vm_register_list_t* segment_size_list =
           VM_DecVariadicOperands("segment_sizes");
-      fprintf(stdout, "[DEBUG]   segment_size_list=0x%p\n", (void*)segment_size_list);
-      if (segment_size_list) {
-        fprintf(stdout, "[DEBUG]   segment_size_list->size=%d\n", (int)segment_size_list->size);
-        fprintf(stdout, "[DEBUG]   segment_size_list->registers=0x%p\n", (void*)segment_size_list->registers);
-      }
-      
-      fprintf(stdout, "[DEBUG] CallVariadic: decoding src_reg_list\n");
       const iree_vm_register_list_t* src_reg_list =
           VM_DecVariadicOperands("operands");
-      fprintf(stdout, "[DEBUG]   src_reg_list=0x%p\n", (void*)src_reg_list);
-      if (src_reg_list) {
-        fprintf(stdout, "[DEBUG]   src_reg_list->size=%d\n", (int)src_reg_list->size);
-        fprintf(stdout, "[DEBUG]   src_reg_list->registers=0x%p\n", (void*)src_reg_list->registers);
-      }
-      
-      fprintf(stdout, "[DEBUG] CallVariadic: decoding dst_reg_list\n");
       const iree_vm_register_list_t* dst_reg_list =
           VM_DecVariadicResults("results");
-      fprintf(stdout, "[DEBUG]   dst_reg_list=0x%p\n", (void*)dst_reg_list);
-      if (dst_reg_list) {
-        fprintf(stdout, "[DEBUG]   dst_reg_list->size=%d\n", (int)dst_reg_list->size);
-        fprintf(stdout, "[DEBUG]   dst_reg_list->registers=0x%p\n", (void*)dst_reg_list->registers);
-      }
-      
-      fprintf(stdout, "[DEBUG] CallVariadic: saving pc to current_frame\n");
       current_frame->pc = pc;
-      fprintf(stdout, "[DEBUG]   current_frame->pc=%d\n", (int)current_frame->pc);
 
       // NOTE: we assume validation has ensured these functions exist.
       // TODO(benvanik): something more clever than just a high bit?
-      fprintf(stdout, "[DEBUG] CallVariadic: checking if import\n");
       int is_import = (function_ordinal & 0x80000000u) != 0;
-      fprintf(stdout, "[DEBUG]   is_import=%d\n", is_import ? 1 : 0);
       if (IREE_UNLIKELY(!is_import)) {
         // Variadic calls are currently only supported for import functions.
-        fprintf(stdout, "[DEBUG] CallVariadic: ERROR - not an import function\n");
         return iree_make_status(
             IREE_STATUS_FAILED_PRECONDITION,
             "variadic calls only supported for internal callees");
       }
 
       // Call import (and possible yield).
-      fprintf(stdout, "[DEBUG] CallVariadic: calling iree_vm_bytecode_call_import_variadic\n");
-      fprintf(stdout, "[DEBUG]   stack=0x%p\n", (void*)stack);
-      fprintf(stdout, "[DEBUG]   module_state=0x%p\n", (void*)module_state);
-      fprintf(stdout, "[DEBUG]   regs.i32=0x%p\n", (void*)regs.i32);
-      fprintf(stdout, "[DEBUG]   regs.ref=0x%p\n", (void*)regs.ref);
-      fprintf(stdout, "[DEBUG]   current_frame=0x%p\n", (void*)current_frame);
       iree_status_t status = iree_vm_bytecode_call_import_variadic(
           stack, module_state, function_ordinal, regs, segment_size_list,
           src_reg_list, dst_reg_list, &current_frame, &regs);
       if (!iree_status_is_ok(status)) {
-        fprintf(stdout, "[DEBUG] CallVariadic: call_import_variadic failed, status=%d\n", (int)iree_status_code(status));
         return status;
       }
-      fprintf(stdout, "[DEBUG] CallVariadic: call_import_variadic succeeded\n");
-      fprintf(stdout, "[DEBUG]   current_frame after call=0x%p\n", (void*)current_frame);
-      fprintf(stdout, "[DEBUG]   regs.i32 after call=0x%p\n", (void*)regs.i32);
-      fprintf(stdout, "[DEBUG]   regs.ref after call=0x%p\n", (void*)regs.ref);
 
       // Restore the local dispatch variables that may have changed during the
       // function call due to stack growth.
-      fprintf(stdout, "[DEBUG] CallVariadic: restoring dispatch variables\n");
       regs_i32 = regs.i32;
       IREE_BUILTIN_ASSUME_ALIGNED(regs_i32, 16);
       regs_ref = regs.ref;
       IREE_BUILTIN_ASSUME_ALIGNED(regs_ref, 16);
       pc = current_frame->pc;
-      fprintf(stdout, "[DEBUG]   regs_i32=0x%p\n", (void*)regs_i32);
-      fprintf(stdout, "[DEBUG]   regs_ref=0x%p\n", (void*)regs_ref);
-      fprintf(stdout, "[DEBUG]   pc=%d\n", (int)pc);
-      fprintf(stdout, "[DEBUG] CallVariadic: completed successfully\n");
     });
 
     DISPATCH_OP(CORE, Return, {
