@@ -6,6 +6,9 @@
 
 #include "iree/vm/bytecode/verifier.h"
 
+#include <stdint.h>
+#include <stdio.h>
+
 #include "iree/base/internal/math.h"
 #include "iree/vm/bytecode/utils/block_list.h"
 #include "iree/vm/bytecode/utils/features.h"
@@ -277,25 +280,40 @@ static iree_status_t iree_vm_bytecode_function_verify_bytecode_op(
 iree_status_t iree_vm_bytecode_function_verify(
     iree_vm_bytecode_module_t* module, uint16_t function_ordinal,
     iree_allocator_t scratch_allocator) {
+  fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_verify: starting for function_ordinal=%d\n", function_ordinal);
+  fprintf(stdout, "[DEBUG]   module pointer: %p\n", (void*)module);
+  fprintf(stdout, "[DEBUG]   module->function_descriptor_count: %d\n", (int)module->function_descriptor_count);
   if (function_ordinal >= module->function_descriptor_count) {
+    fprintf(stdout, "[DEBUG]   ERROR: function_ordinal %d >= count %d\n", function_ordinal, (int)module->function_descriptor_count);
     return iree_make_status(IREE_STATUS_OUT_OF_RANGE,
                             "invalid function ordinal");
   }
+  fprintf(stdout, "[DEBUG]   Getting function_signature_def...\n");
   iree_vm_FunctionSignatureDef_table_t function_signature_def =
       iree_vm_FunctionSignatureDef_vec_at(
           iree_vm_BytecodeModuleDef_function_signatures(module->def),
           function_ordinal);
+  fprintf(stdout, "[DEBUG]   function_signature_def: %p\n", (void*)function_signature_def);
+  fprintf(stdout, "[DEBUG]   Getting function_descriptor...\n");
   const iree_vm_FunctionDescriptor_t* function_descriptor =
       &module->function_descriptor_table[function_ordinal];
+  fprintf(stdout, "[DEBUG]   function_descriptor: %p\n", (void*)function_descriptor);
+  fprintf(stdout, "[DEBUG]   function_descriptor alignment: %d (0x%x)\n",
+          (int)((uintptr_t)function_descriptor % 16), (int)((uintptr_t)function_descriptor % 16));
 
+  fprintf(stdout, "[DEBUG]   Checking features...\n");
   const iree_vm_FeatureBits_enum_t available_features =
       iree_vm_bytecode_available_features();
   const iree_vm_FeatureBits_enum_t required_features =
       function_descriptor->requirements;
+  fprintf(stdout, "[DEBUG]   available_features: %d, required_features: %d\n",
+          (int)available_features, (int)required_features);
   IREE_RETURN_IF_ERROR(iree_vm_check_feature_mismatch(
       __FILE__, __LINE__, required_features, available_features));
 
+  fprintf(stdout, "[DEBUG]   function_descriptor->block_count: %d\n", (int)function_descriptor->block_count);
   if (function_descriptor->block_count == 0) {
+    fprintf(stdout, "[DEBUG]   ERROR: block_count is 0\n");
     return iree_make_status(
         IREE_STATUS_OUT_OF_RANGE,
         "no blocks defined; functions must have at least one block");
@@ -358,6 +376,16 @@ iree_status_t iree_vm_bytecode_function_verify(
 
   // NOTE: module verification ensures the function descriptor has a valid
   // bytecode range so we can assume that's true here.
+  fprintf(stdout, "[DEBUG]   Checking bytecode range...\n");
+  fprintf(stdout, "[DEBUG]     function_descriptor->bytecode_length: %d\n", (int)function_descriptor->bytecode_length);
+  fprintf(stdout, "[DEBUG]     function_descriptor->bytecode_offset: %d\n", (int)function_descriptor->bytecode_offset);
+  fprintf(stdout, "[DEBUG]     module->bytecode_data.data: %p\n", (void*)module->bytecode_data.data);
+  fprintf(stdout, "[DEBUG]     module->bytecode_data.data_length: %d\n", (int)module->bytecode_data.data_length);
+  fprintf(stdout, "[DEBUG]     bytecode_data start pointer: %p\n", 
+          (void*)(module->bytecode_data.data + function_descriptor->bytecode_offset));
+  fprintf(stdout, "[DEBUG]     bytecode_data start alignment: %d (0x%x)\n",
+          (int)((uintptr_t)(module->bytecode_data.data + function_descriptor->bytecode_offset) % 16),
+          (int)((uintptr_t)(module->bytecode_data.data + function_descriptor->bytecode_offset) % 16));
   IREE_ASSERT(function_descriptor->bytecode_length > 0);
   IREE_ASSERT(function_descriptor->bytecode_offset >= 0);
   IREE_ASSERT(function_descriptor->bytecode_offset +
@@ -366,24 +394,35 @@ iree_status_t iree_vm_bytecode_function_verify(
   iree_const_byte_span_t bytecode_data = iree_make_const_byte_span(
       module->bytecode_data.data + function_descriptor->bytecode_offset,
       function_descriptor->bytecode_length);
+  fprintf(stdout, "[DEBUG]     bytecode_data.data: %p, data_length: %d\n",
+          (void*)bytecode_data.data, (int)bytecode_data.data_length);
   const uint32_t max_pc = (uint32_t)function_descriptor->bytecode_length;
+  fprintf(stdout, "[DEBUG]     max_pc: %d\n", (int)max_pc);
 
   // Reserve the block list. As we walk the bytecode we'll declare/define blocks
   // and then afterward verify all were found.
+  fprintf(stdout, "[DEBUG]   Initializing block list (block_count: %d)...\n", (int)function_descriptor->block_count);
   IREE_ASSERT(function_descriptor->block_count > 0);
   IREE_RETURN_IF_ERROR(iree_vm_bytecode_block_list_initialize(
       function_descriptor->block_count, scratch_allocator,
       &verify_state.block_list));
+  fprintf(stdout, "[DEBUG]   Block list initialized\n");
 
   // Perform bytecode verification by performing a single-pass walk of all
   // function bytecode.
+  fprintf(stdout, "[DEBUG]   Starting bytecode verification walk (data_length: %d)...\n", (int)bytecode_data.data_length);
   iree_status_t status = iree_ok_status();
   for (uint32_t pc = 0; pc < bytecode_data.data_length - 1;) {
     uint32_t start_pc = pc;
+    fprintf(stdout, "[DEBUG]     Verifying bytecode op at pc=%d (start_pc=%d, max_pc=%d)\n",
+            (int)pc, (int)start_pc, (int)max_pc);
     status = iree_vm_bytecode_function_verify_bytecode_op(
         module, &verify_state, function_signature_def, function_descriptor,
         bytecode_data, start_pc, max_pc, &pc);
+    fprintf(stdout, "[DEBUG]     iree_vm_bytecode_function_verify_bytecode_op: status=%d\n", (int)iree_status_code(status));
     if (!iree_status_is_ok(status)) {
+      fprintf(stdout, "[DEBUG]     ERROR: bytecode op verification failed at pc=%d with status %d\n",
+              (int)start_pc, (int)iree_status_code(status));
 #if IREE_STATUS_MODE
       // To get a useful source location we have to ask the main module; the
       // base function table may only contain public symbols and not any
@@ -411,19 +450,33 @@ iree_status_t iree_vm_bytecode_function_verify(
 
   // Ensure there was a terminator.
   if (iree_status_is_ok(status) && verify_state.in_block) {
+    fprintf(stdout, "[DEBUG]   ERROR: function missing terminator in the last block\n");
     status = iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                               "function missing terminator in the last block");
   }
 
   // Verify all blocks are defined and have proper markers.
   if (iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG]   Verifying block list...\n");
     status = iree_vm_bytecode_block_list_verify(&verify_state.block_list,
                                                 bytecode_data);
+    if (!iree_status_is_ok(status)) {
+      fprintf(stdout, "[DEBUG]   ERROR: block list verification failed with status %d\n",
+              (int)iree_status_code(status));
+    } else {
+      fprintf(stdout, "[DEBUG]   Block list verification passed\n");
+    }
   }
 
   iree_vm_bytecode_block_list_deinitialize(&verify_state.block_list,
                                            scratch_allocator);
 
+  if (iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_verify: completed successfully for function_ordinal=%d\n", function_ordinal);
+  } else {
+    fprintf(stdout, "[DEBUG] iree_vm_bytecode_function_verify: failed for function_ordinal=%d with status %d\n",
+            function_ordinal, (int)iree_status_code(status));
+  }
   return status;
 }
 
@@ -438,13 +491,20 @@ iree_status_t iree_vm_bytecode_function_verify(
 
 // Bails if the |pc| exceeds the |max_pc|.
 #define IREE_VM_VERIFY_PC_RANGE(pc, max_pc)                                  \
-  if (IREE_UNLIKELY((pc) > (max_pc))) {                                      \
-    return iree_make_status(IREE_STATUS_OUT_OF_RANGE,                        \
-                            "bytecode data overrun trying to parsing op at " \
-                            "%08X (%u) of %u available bytes",               \
-                            (uint32_t)(pc), (uint32_t)(pc),                  \
-                            (uint32_t)(max_pc));                             \
-  }
+  do {                                                                        \
+    fprintf(stdout, "[DEBUG]           IREE_VM_VERIFY_PC_RANGE: pc=%d, max_pc=%d\n", \
+            (int)(pc), (int)(max_pc));                                       \
+    if (IREE_UNLIKELY((pc) > (max_pc))) {                                    \
+      fprintf(stdout, "[DEBUG]           ERROR: PC range check failed! pc (%d) > max_pc (%d)\n", \
+              (int)(pc), (int)(max_pc));                                     \
+      return iree_make_status(IREE_STATUS_OUT_OF_RANGE,                      \
+                              "bytecode data overrun trying to parsing op at " \
+                              "%08X (%u) of %u available bytes",             \
+                              (uint32_t)(pc), (uint32_t)(pc),                \
+                              (uint32_t)(max_pc));                           \
+    }                                                                         \
+    fprintf(stdout, "[DEBUG]           IREE_VM_VERIFY_PC_RANGE: passed\n"); \
+  } while (0)
 
 // Bails if the function doesn't have the given |required_features| declared.
 #define IREE_VM_VERIFY_REQUIREMENT(required_features)                         \
@@ -532,9 +592,22 @@ iree_status_t iree_vm_bytecode_function_verify(
   pc += 2;
 #define VM_VerifyConstI32(name)            \
   IREE_VM_VERIFY_PC_RANGE(pc + 4, max_pc); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: About to read I32 at pc=%d\n", (int)pc); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: bytecode_data pointer: %p\n", (void*)bytecode_data); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: Reading from address: %p\n", (void*)&bytecode_data[pc]); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: Address alignment: %d (0x%x)\n", \
+          (int)((uintptr_t)&bytecode_data[pc] % 4), (int)((uintptr_t)&bytecode_data[pc] % 4)); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: Bytes at pc: 0x%02X 0x%02X 0x%02X 0x%02X\n", \
+          (int)bytecode_data[pc], (int)bytecode_data[pc+1], (int)bytecode_data[pc+2], (int)bytecode_data[pc+3]); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: About to call OP_I32(0), pointer cast: %p\n", \
+          (void*)((uint32_t*)&bytecode_data[pc])); \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: Calling iree_unaligned_load_le...\n"); \
   uint32_t name = OP_I32(0);               \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: Successfully read value: %d (0x%08X)\n", \
+          (int)name, (int)name); \
   (void)(name);                            \
-  pc += 4;
+  pc += 4;                                 \
+  fprintf(stdout, "[DEBUG]             VM_VerifyConstI32: pc after read: %d\n", (int)pc)
 #define VM_VerifyConstI64(name)            \
   IREE_VM_VERIFY_PC_RANGE(pc + 8, max_pc); \
   uint64_t name = OP_I64(0);               \
@@ -1001,6 +1074,8 @@ static iree_status_t iree_vm_bytecode_function_verify_call(
 
 #define VERIFY_OP(ext, op_name, body)  \
   case IREE_VM_OP_##ext##_##op_name: { \
+    fprintf(stdout, "[DEBUG]       VERIFY_OP: %s_%s (opcode=0x%02X) at pc=%d\n", \
+            #ext, #op_name, (int)IREE_VM_OP_##ext##_##op_name, (int)pc); \
     body;                              \
   } break;
 
@@ -1030,9 +1105,18 @@ static iree_status_t iree_vm_bytecode_function_verify_bytecode_op(
     iree_vm_FunctionDescriptor_struct_t function_descriptor,
     iree_const_byte_span_t function_bytecode, uint32_t start_pc,
     uint32_t max_pc, uint32_t* out_next_pc) {
+  fprintf(stdout, "[DEBUG]   iree_vm_bytecode_function_verify_bytecode_op: start_pc=%d, max_pc=%d\n",
+          (int)start_pc, (int)max_pc);
+  fprintf(stdout, "[DEBUG]     function_bytecode.data: %p, data_length: %d\n",
+          (void*)function_bytecode.data, (int)function_bytecode.data_length);
+  fprintf(stdout, "[DEBUG]     function_bytecode.data alignment: %d (0x%x)\n",
+          (int)((uintptr_t)function_bytecode.data % 16),
+          (int)((uintptr_t)function_bytecode.data % 16));
   *out_next_pc = 0;
   uint32_t pc = start_pc;
   const uint8_t* bytecode_data = function_bytecode.data;
+  fprintf(stdout, "[DEBUG]     bytecode_data pointer: %p\n", (void*)bytecode_data);
+  fprintf(stdout, "[DEBUG]     verify_state->in_block: %d\n", (int)verify_state->in_block);
 
   // NOTE: we keep this as simple as possible so that we can one day auto
   // generate it from tblgen, which has all the encodings in a similar form
@@ -1040,16 +1124,32 @@ static iree_status_t iree_vm_bytecode_function_verify_bytecode_op(
 
   // All ops except for Block must be inside of a block. We hoist that check
   // that here before switching out.
+  fprintf(stdout, "[DEBUG]     Checking PC range: pc=%d, pc+1=%d, max_pc=%d\n",
+          (int)pc, (int)(pc + 1), (int)max_pc);
+  if (pc + 1 > max_pc) {
+    fprintf(stdout, "[DEBUG]     ERROR: PC range check failed! pc+1 (%d) > max_pc (%d)\n",
+            (int)(pc + 1), (int)max_pc);
+  }
   IREE_VM_VERIFY_PC_RANGE(pc + 1, max_pc);
+  fprintf(stdout, "[DEBUG]     Reading opcode at pc=%d, bytecode_data[%d]=0x%02X\n",
+          (int)pc, (int)pc, (int)bytecode_data[pc]);
   if (verify_state->in_block == 0) {
     // If not in a block then the next opcode must be a block.
+    fprintf(stdout, "[DEBUG]     Not in block, checking if opcode is Block (0x%02X == 0x%02X)\n",
+            (int)bytecode_data[pc], (int)IREE_VM_OP_CORE_Block);
     if (bytecode_data[pc] != IREE_VM_OP_CORE_Block) {
+      fprintf(stdout, "[DEBUG]     ERROR: op at pc %d (0x%08X) is not in a block, opcode=0x%02X\n",
+              (int)pc, (int)pc, (int)bytecode_data[pc]);
       return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                               "op at pc %08X is not in a block", pc);
     }
   } else {
     // If in a block then the next opcode must not be a block.
+    fprintf(stdout, "[DEBUG]     In block, checking if opcode is NOT Block (0x%02X != 0x%02X)\n",
+            (int)bytecode_data[pc], (int)IREE_VM_OP_CORE_Block);
     if (bytecode_data[pc] == IREE_VM_OP_CORE_Block) {
+      fprintf(stdout, "[DEBUG]     ERROR: op at pc %d (0x%08X) is a block while still in a block\n",
+              (int)pc, (int)pc);
       return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                               "op at pc %08X is a block while still in a block",
                               pc);
@@ -1057,7 +1157,10 @@ static iree_status_t iree_vm_bytecode_function_verify_bytecode_op(
   }
 
   // Get primary opcode. All ops have at least 1 byte.
-  switch (bytecode_data[pc++]) {
+  uint8_t opcode = bytecode_data[pc++];
+  fprintf(stdout, "[DEBUG]     Opcode: 0x%02X, new pc after reading opcode: %d\n",
+          (int)opcode, (int)pc);
+  switch (opcode) {
     //===------------------------------------------------------------------===//
     // Globals
     //===------------------------------------------------------------------===//
@@ -1143,8 +1246,16 @@ static iree_status_t iree_vm_bytecode_function_verify_bytecode_op(
     //===------------------------------------------------------------------===//
 
     VERIFY_OP(CORE, ConstI32, {
+      fprintf(stdout, "[DEBUG]         ConstI32: Starting verification, pc=%d, max_pc=%d\n",
+              (int)pc, (int)max_pc);
+      fprintf(stdout, "[DEBUG]         ConstI32: Verifying I32 attribute (4 bytes), pc before: %d\n", (int)pc);
       VM_VerifyAttrI32(value);
+      fprintf(stdout, "[DEBUG]         ConstI32: I32 attribute verified, pc after: %d, value=%d\n",
+              (int)pc, (int)value);
+      fprintf(stdout, "[DEBUG]         ConstI32: Verifying result register, pc before: %d\n", (int)pc);
       VM_VerifyResultRegI32(result);
+      fprintf(stdout, "[DEBUG]         ConstI32: Result register verified, pc after: %d\n", (int)pc);
+      fprintf(stdout, "[DEBUG]         ConstI32: Verification complete\n");
     });
 
     VERIFY_OP(CORE, ConstI32Zero, { VM_VerifyResultRegI32(result); });
@@ -2130,10 +2241,14 @@ static iree_status_t iree_vm_bytecode_function_verify_bytecode_op(
 #endif  // IREE_VM_EXT_F64_ENABLE
 
     default:
+      fprintf(stdout, "[DEBUG]     ERROR: unrecognized opcode 0x%02X at pc=%d (bytecode_data[%d])\n",
+              (int)bytecode_data[pc - 1], (int)(pc - 1), (int)(pc - 1));
       return iree_make_status(IREE_STATUS_INVALID_ARGUMENT,
                               "unrecognized opcode %u", bytecode_data[pc - 1]);
   }
 
+  fprintf(stdout, "[DEBUG]     Opcode 0x%02X verified successfully, next_pc=%d\n",
+          (int)opcode, (int)pc);
   *out_next_pc = pc;
   return iree_ok_status();
 }

@@ -6,6 +6,7 @@
 
 #include "iree/vm/ref.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "iree/base/internal/atomics.h"
@@ -232,24 +233,60 @@ IREE_API_EXPORT void iree_vm_ref_release(iree_vm_ref_t* ref) {
 
 IREE_API_EXPORT void iree_vm_ref_assign(iree_vm_ref_t* ref,
                                         iree_vm_ref_t* out_ref) {
+  fprintf(stdout, "[DEBUG] iree_vm_ref_assign: starting\n");
+  fprintf(stdout, "[DEBUG]   ref: 0x%p\n", (void*)ref);
+  fprintf(stdout, "[DEBUG]   out_ref: 0x%p\n", (void*)out_ref);
+  fprintf(stdout, "[DEBUG]   ref alignment: %d\n", (int)((uintptr_t)ref % sizeof(iree_vm_ref_t)));
+  fprintf(stdout, "[DEBUG]   out_ref alignment: %d\n", (int)((uintptr_t)out_ref % sizeof(iree_vm_ref_t)));
+  
   IREE_VM_REF_ASSERT(ref);
   IREE_VM_REF_ASSERT(out_ref);
 
   // NOTE: ref and out_ref may alias.
-  iree_vm_ref_t src_ref = *ref;
+  fprintf(stdout, "[DEBUG]   reading src_ref from ref\n");
+  // Safe unaligned read: copy byte-by-byte
+  iree_vm_ref_t src_ref;
+  const uint8_t* src_bytes = (const uint8_t*)ref;
+  uint8_t* dst_bytes = (uint8_t*)&src_ref;
+  for (int i = 0; i < (int)sizeof(iree_vm_ref_t); ++i) {
+    dst_bytes[i] = src_bytes[i];
+  }
+  fprintf(stdout, "[DEBUG]   src_ref.ptr: 0x%p\n", (void*)src_ref.ptr);
+  fprintf(stdout, "[DEBUG]   src_ref.type: %u (0x%08X)\n", (unsigned int)src_ref.type, (unsigned int)src_ref.type);
+  
   if (ref == out_ref) {
+    fprintf(stdout, "[DEBUG]   self-assignment detected, returning early\n");
     // Source == target; ignore entirely.
     return;
   }
 
-  iree_vm_ref_t dst_ref = *out_ref;
+  fprintf(stdout, "[DEBUG]   reading dst_ref from out_ref\n");
+  // Safe unaligned read: copy byte-by-byte
+  iree_vm_ref_t dst_ref;
+  src_bytes = (const uint8_t*)out_ref;
+  dst_bytes = (uint8_t*)&dst_ref;
+  for (int i = 0; i < (int)sizeof(iree_vm_ref_t); ++i) {
+    dst_bytes[i] = src_bytes[i];
+  }
+  fprintf(stdout, "[DEBUG]   dst_ref.ptr: 0x%p\n", (void*)dst_ref.ptr);
+  fprintf(stdout, "[DEBUG]   dst_ref.type: %u (0x%08X)\n", (unsigned int)dst_ref.type, (unsigned int)dst_ref.type);
+  
   if (dst_ref.ptr != NULL) {
+    fprintf(stdout, "[DEBUG]   releasing existing dst_ref\n");
     // Release existing value.
     iree_vm_ref_release(&dst_ref);
+    fprintf(stdout, "[DEBUG]   dst_ref released\n");
   }
 
   // Assign ref to out_ref (without incrementing counter).
-  *out_ref = src_ref;
+  // Safe unaligned write: copy byte-by-byte
+  fprintf(stdout, "[DEBUG]   assigning src_ref to out_ref\n");
+  src_bytes = (const uint8_t*)&src_ref;
+  dst_bytes = (uint8_t*)out_ref;
+  for (int i = 0; i < (int)sizeof(iree_vm_ref_t); ++i) {
+    dst_bytes[i] = src_bytes[i];
+  }
+  fprintf(stdout, "[DEBUG] iree_vm_ref_assign: completed\n");
 }
 
 IREE_API_EXPORT void iree_vm_ref_move(iree_vm_ref_t* ref,

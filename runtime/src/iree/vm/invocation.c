@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "iree/base/api.h"
@@ -74,70 +75,121 @@ static void iree_vm_invoke_release_result_storage(
 static iree_status_t iree_vm_invoke_marshal_inputs(
     iree_string_view_t cconv_arguments, const iree_vm_list_t* inputs,
     iree_byte_span_t arguments) {
+  fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: starting\n");
+  fprintf(stdout, "[DEBUG]   cconv_arguments.size=%d\n", (int)cconv_arguments.size);
+  fprintf(stdout, "[DEBUG]   arguments.data=0x%p\n", (void*)arguments.data);
+  fprintf(stdout, "[DEBUG]   arguments.data_length=%d\n", (int)arguments.data_length);
+  fprintf(stdout, "[DEBUG]   inputs=0x%p\n", (void*)inputs);
+  
   // We are 1:1 right now with no variadic args, so do a quick verification on
   // the input list.
   iree_host_size_t expected_input_count =
       cconv_arguments.size > 0
           ? (cconv_arguments.data[0] == 'v' ? 0 : cconv_arguments.size)
           : 0;
+  fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: expected_input_count=%d\n", (int)expected_input_count);
   if (IREE_UNLIKELY(!inputs)) {
     if (IREE_UNLIKELY(expected_input_count > 0)) {
+      fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: no inputs but expected %d\n", (int)expected_input_count);
       return iree_make_status(
           IREE_STATUS_INVALID_ARGUMENT,
           "no input provided to a function that has inputs");
     }
+    fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: no inputs needed, returning OK\n");
     return iree_ok_status();
-  } else if (IREE_UNLIKELY(expected_input_count != iree_vm_list_size(inputs))) {
+  }
+  iree_host_size_t input_list_size = iree_vm_list_size(inputs);
+  fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: input_list_size=%d\n", (int)input_list_size);
+  if (IREE_UNLIKELY(expected_input_count != input_list_size)) {
+    fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: input count mismatch\n");
     return iree_make_status(
         IREE_STATUS_INVALID_ARGUMENT,
         "input list and function mismatch; expected %" PRIhsz
         " arguments but passed %" PRIhsz,
-        expected_input_count, iree_vm_list_size(inputs));
+        expected_input_count, input_list_size);
   }
 
   uint8_t* p = arguments.data;
+  fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: starting loop, p=0x%p, alignment=%d\n", (void*)p, (int)((uintptr_t)p % 8));
   for (iree_host_size_t cconv_i = 0, arg_i = 0; cconv_i < cconv_arguments.size;
        ++cconv_i, ++arg_i) {
+    fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: loop iteration %d, cconv_type=0x%02X\n", (int)cconv_i, (unsigned char)cconv_arguments.data[cconv_i]);
     switch (cconv_arguments.data[cconv_i]) {
       case IREE_VM_CCONV_TYPE_VOID:
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: VOID\n");
         break;
       case IREE_VM_CCONV_TYPE_I32: {
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: I32, p=0x%p, alignment=%d\n", (void*)p, (int)((uintptr_t)p % 4));
         iree_vm_value_t value;
-        IREE_RETURN_IF_ERROR(iree_vm_list_get_value_as(
-            inputs, arg_i, IREE_VM_VALUE_TYPE_I32, &value));
+        iree_status_t status = iree_vm_list_get_value_as(
+            inputs, arg_i, IREE_VM_VALUE_TYPE_I32, &value);
+        if (!iree_status_is_ok(status)) {
+          fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: get_value_as(I32) failed, status=%d\n", (int)iree_status_code(status));
+          return status;
+        }
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: got I32 value=%d\n", (int)value.i32);
         memcpy(p, &value.i32, sizeof(int32_t));
         p += sizeof(int32_t);
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: copied I32, new p=0x%p\n", (void*)p);
       } break;
       case IREE_VM_CCONV_TYPE_I64: {
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: I64, p=0x%p, alignment=%d\n", (void*)p, (int)((uintptr_t)p % 8));
         iree_vm_value_t value;
-        IREE_RETURN_IF_ERROR(iree_vm_list_get_value_as(
-            inputs, arg_i, IREE_VM_VALUE_TYPE_I64, &value));
+        iree_status_t status = iree_vm_list_get_value_as(
+            inputs, arg_i, IREE_VM_VALUE_TYPE_I64, &value);
+        if (!iree_status_is_ok(status)) {
+          fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: get_value_as(I64) failed, status=%d\n", (int)iree_status_code(status));
+          return status;
+        }
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: got I64 value=%lld\n", (long long)value.i64);
         memcpy(p, &value.i64, sizeof(int64_t));
         p += sizeof(int64_t);
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: copied I64, new p=0x%p\n", (void*)p);
       } break;
       case IREE_VM_CCONV_TYPE_F32: {
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: F32, p=0x%p, alignment=%d\n", (void*)p, (int)((uintptr_t)p % 4));
         iree_vm_value_t value;
-        IREE_RETURN_IF_ERROR(iree_vm_list_get_value_as(
-            inputs, arg_i, IREE_VM_VALUE_TYPE_F32, &value));
+        iree_status_t status = iree_vm_list_get_value_as(
+            inputs, arg_i, IREE_VM_VALUE_TYPE_F32, &value);
+        if (!iree_status_is_ok(status)) {
+          fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: get_value_as(F32) failed, status=%d\n", (int)iree_status_code(status));
+          return status;
+        }
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: got F32 value=%f\n", value.f32);
         memcpy(p, &value.f32, sizeof(float));
         p += sizeof(float);
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: copied F32, new p=0x%p\n", (void*)p);
       } break;
       case IREE_VM_CCONV_TYPE_F64: {
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: F64, p=0x%p, alignment=%d\n", (void*)p, (int)((uintptr_t)p % 8));
         iree_vm_value_t value;
-        IREE_RETURN_IF_ERROR(iree_vm_list_get_value_as(
-            inputs, arg_i, IREE_VM_VALUE_TYPE_F64, &value));
+        iree_status_t status = iree_vm_list_get_value_as(
+            inputs, arg_i, IREE_VM_VALUE_TYPE_F64, &value);
+        if (!iree_status_is_ok(status)) {
+          fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: get_value_as(F64) failed, status=%d\n", (int)iree_status_code(status));
+          return status;
+        }
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: got F64 value=%f\n", value.f64);
         memcpy(p, &value.f64, sizeof(double));
         p += sizeof(double);
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: copied F64, new p=0x%p\n", (void*)p);
       } break;
       case IREE_VM_CCONV_TYPE_REF: {
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: REF, p=0x%p\n", (void*)p);
         // TODO(benvanik): see if we can't remove this retain by instead relying
         // on the caller still owning the list.
-        IREE_RETURN_IF_ERROR(iree_vm_list_get_ref_assign(
-            inputs, arg_i, (iree_vm_ref_t*)p));  // safe unaligned
+        iree_status_t status = iree_vm_list_get_ref_assign(
+            inputs, arg_i, (iree_vm_ref_t*)p);  // safe unaligned
+        if (!iree_status_is_ok(status)) {
+          fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: get_ref_assign failed, status=%d\n", (int)iree_status_code(status));
+          return status;
+        }
         p += sizeof(iree_vm_ref_t);
+        fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: assigned REF, new p=0x%p\n", (void*)p);
       } break;
     }
   }
+  fprintf(stdout, "[DEBUG] iree_vm_invoke_marshal_inputs: completed successfully\n");
   return iree_ok_status();
 }
 
@@ -278,6 +330,15 @@ IREE_API_EXPORT iree_status_t iree_vm_invoke(
     iree_vm_invocation_flags_t flags, const iree_vm_invocation_policy_t* policy,
     const iree_vm_list_t* inputs, iree_vm_list_t* outputs,
     iree_allocator_t host_allocator) {
+  fprintf(stdout, "[DEBUG] iree_vm_invoke: starting\n");
+  fprintf(stdout, "[DEBUG]   context: %p\n", (void*)context);
+  fprintf(stdout, "[DEBUG]   function.module: %p\n", (void*)function.module);
+  fprintf(stdout, "[DEBUG]   function.linkage: %d\n", (int)function.linkage);
+  fprintf(stdout, "[DEBUG]   function.ordinal: %d\n", (int)function.ordinal);
+  fprintf(stdout, "[DEBUG]   flags: %d\n", (int)flags);
+  fprintf(stdout, "[DEBUG]   inputs: %p\n", (void*)inputs);
+  fprintf(stdout, "[DEBUG]   outputs: %p\n", (void*)outputs);
+  fprintf(stdout, "[DEBUG]   host_allocator: %p\n", (void*)host_allocator.ctl);
   IREE_TRACE_ZONE_BEGIN(z0);
 
   // Bound the synchronous invocation to the timeout specified by the user
@@ -302,16 +363,22 @@ IREE_API_EXPORT iree_status_t iree_vm_invoke(
   // Perform the initial invocation step, which if synchronous may fully
   // complete the invocation before returning. If it yields we'll need to resume
   // it, possibly after taking care of pending waits.
+  fprintf(stdout, "[DEBUG]   Calling iree_vm_begin_invoke...\n");
   iree_vm_invoke_state_t state = {0};
   iree_status_t status = iree_vm_begin_invoke(&state, context, function, flags,
                                               policy, inputs, host_allocator);
+  fprintf(stdout, "[DEBUG]   iree_vm_begin_invoke returned, status=%d\n", (int)iree_status_code(status));
+  fprintf(stdout, "[DEBUG]   state.stack: %p\n", (void*)state.stack);
+  fprintf(stdout, "[DEBUG]   Entering resume loop (status is deferred: %d)\n", iree_status_is_deferred(status));
   while (iree_status_is_deferred(status)) {
+    fprintf(stdout, "[DEBUG]     Iteration of resume loop\n");
     // Grab the wait frame from the stack holding the wait parameters.
     // This is optional: if an invocation yields for cooperative scheduling
     // purposes there will not be a wait frame on the stack and we'll just
     // resume it below.
     iree_vm_stack_frame_t* current_frame =
         iree_vm_stack_current_frame(state.stack);
+    fprintf(stdout, "[DEBUG]     current_frame: %p\n", (void*)current_frame);
     if (IREE_UNLIKELY(!current_frame)) {
       // Unbalanced stack.
       status = iree_make_status(IREE_STATUS_FAILED_PRECONDITION,
@@ -338,23 +405,34 @@ IREE_API_EXPORT iree_status_t iree_vm_invoke(
     // Resume the invocation after its wait completes (if it wasn't just a
     // simple yield for cooperation). This may yield again and require another
     // tick or complete with OK (or an error).
+    fprintf(stdout, "[DEBUG]     Calling iree_vm_resume_invoke...\n");
     status = iree_vm_resume_invoke(&state);
+    fprintf(stdout, "[DEBUG]     iree_vm_resume_invoke returned, status=%d\n", (int)iree_status_code(status));
   }
+  fprintf(stdout, "[DEBUG]   Exited resume loop, final status=%d\n", (int)iree_status_code(status));
 
   // If the invoke process itself was successful we can end the invocation
   // cleanly and get the invocation status as returned by the target function.
+  fprintf(stdout, "[DEBUG]   Checking if invoke was successful (status=%d)...\n", (int)iree_status_code(status));
   iree_status_t invoke_status = iree_ok_status();
   if (iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG]   Calling iree_vm_end_invoke...\n");
     status = iree_vm_end_invoke(&state, outputs, &invoke_status);
+    fprintf(stdout, "[DEBUG]   iree_vm_end_invoke returned, status=%d, invoke_status=%d\n",
+            (int)iree_status_code(status), (int)iree_status_code(invoke_status));
+  } else {
+    fprintf(stdout, "[DEBUG]   Invoke failed, skipping iree_vm_end_invoke\n");
   }
 
   // Otherwise if we failed to invoke we need to tear down the state to release
   // all resources retained by the stack.
   if (!iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG]   Invoke failed, calling iree_vm_abort_invoke...\n");
     // Cleanup the invocation state if the end wasn't able to.
     // This may leave the context in an unexpected state but the caller is
     // expected to tear down everything if this happens.
     iree_vm_abort_invoke(&state);
+    fprintf(stdout, "[DEBUG]   iree_vm_abort_invoke completed\n");
   }
 
   // Leave the fiber context now that execution has completed.
@@ -368,6 +446,7 @@ IREE_API_EXPORT iree_status_t iree_vm_invoke(
               (!iree_status_is_ok(status) && iree_status_is_ok(invoke_status)));
   status = !iree_status_is_ok(invoke_status) ? invoke_status : status;
 
+  fprintf(stdout, "[DEBUG] iree_vm_invoke: completed with final status=%d\n", (int)iree_status_code(status));
   IREE_TRACE_ZONE_END(z0);
   return status;
 }
@@ -386,43 +465,75 @@ IREE_API_EXPORT iree_status_t iree_vm_begin_invoke(
     iree_vm_function_t function, iree_vm_invocation_flags_t flags,
     const iree_vm_invocation_policy_t* policy, const iree_vm_list_t* inputs,
     iree_allocator_t host_allocator) {
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: starting\n");
+  fprintf(stdout, "[DEBUG]   state: 0x%p\n", (void*)state);
+  fprintf(stdout, "[DEBUG]   context: 0x%p\n", (void*)context);
+  fprintf(stdout, "[DEBUG]   function.module: 0x%p\n", (void*)function.module);
+  fprintf(stdout, "[DEBUG]   function.linkage: %d\n", (int)function.linkage);
+  fprintf(stdout, "[DEBUG]   function.ordinal: %d\n", (int)function.ordinal);
+  fprintf(stdout, "[DEBUG]   flags: %d\n", (int)flags);
+  fprintf(stdout, "[DEBUG]   inputs: 0x%p\n", (void*)inputs);
+  fprintf(stdout, "[DEBUG]   host_allocator: 0x%p\n", (void*)host_allocator.ctl);
+  
   IREE_ASSERT_ARGUMENT(context);
   IREE_TRACE_ZONE_BEGIN(z0);
 
   // Force tracing if specified on the context.
   if (iree_vm_context_flags(context) & IREE_VM_CONTEXT_FLAG_TRACE_EXECUTION) {
     flags |= IREE_VM_INVOCATION_FLAG_TRACE_EXECUTION;
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: enabled trace execution\n");
   }
 
   // Grab function metadata used for marshaling inputs/outputs.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: getting function signature\n");
   iree_vm_function_signature_t signature =
       iree_vm_function_signature(&function);
   iree_string_view_t cconv_arguments = iree_string_view_empty();
   iree_string_view_t cconv_results = iree_string_view_empty();
-  IREE_RETURN_AND_END_ZONE_IF_ERROR(
-      z0, iree_vm_function_call_get_cconv_fragments(
-              &signature, &cconv_arguments, &cconv_results));
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: getting cconv fragments\n");
+  iree_status_t status = iree_vm_function_call_get_cconv_fragments(
+      &signature, &cconv_arguments, &cconv_results);
+  if (!iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: get_cconv_fragments failed, status=%d\n", (int)iree_status_code(status));
+    IREE_TRACE_ZONE_END(z0);
+    return status;
+  }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: cconv_arguments.size=%d\n", (int)cconv_arguments.size);
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: cconv_results.size=%d\n", (int)cconv_results.size);
 
   // Allocate argument storage on the native stack. It only needs to survive the
   // begin call as it's consumed by the invokee.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: computing argument size\n");
   iree_byte_span_t arguments = iree_make_byte_span(NULL, 0);
-  IREE_RETURN_AND_END_ZONE_IF_ERROR(
-      z0,
-      iree_vm_function_call_compute_cconv_fragment_size(
-          cconv_arguments, /*segment_size_list=*/NULL, &arguments.data_length));
+  status = iree_vm_function_call_compute_cconv_fragment_size(
+      cconv_arguments, /*segment_size_list=*/NULL, &arguments.data_length);
+  if (!iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: compute_cconv_fragment_size (args) failed, status=%d\n", (int)iree_status_code(status));
+    IREE_TRACE_ZONE_END(z0);
+    return status;
+  }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: arguments.data_length=%d\n", (int)arguments.data_length);
   const bool arguments_on_heap =
       arguments.data_length > IREE_VM_STACK_MAX_ARGUMENT_ALLOCA_SIZE;
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: arguments_on_heap=%d\n", arguments_on_heap ? 1 : 0);
   if (!arguments_on_heap) {
     // Arguments fit on the native stack without too much worry about
     // overflowing. This is the fast path (effectively just an $sp bump).
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: allocating arguments on stack\n");
     arguments.data = iree_alloca(arguments.data_length);
   } else {
     // Couldn't inline, do a heap allocation that we'll keep until this function
     // returns.
-    IREE_RETURN_AND_END_ZONE_IF_ERROR(
-        z0, iree_allocator_malloc(host_allocator, arguments.data_length,
-                                  (void**)&arguments.data));
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: allocating arguments on heap\n");
+    status = iree_allocator_malloc(host_allocator, arguments.data_length,
+                                  (void**)&arguments.data);
+    if (!iree_status_is_ok(status)) {
+      fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: malloc (args) failed, status=%d\n", (int)iree_status_code(status));
+      IREE_TRACE_ZONE_END(z0);
+      return status;
+    }
   }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: arguments.data=0x%p\n", (void*)arguments.data);
   memset(arguments.data, 0, arguments.data_length);
 
   // Allocate the result storage that will be populated by the invokee. This
@@ -430,32 +541,52 @@ IREE_API_EXPORT iree_status_t iree_vm_begin_invoke(
   // storage. This reduces the overall available stack space but not by much,
   // and if the stack needs to dynamically grow the inlined storage will still
   // be available.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: computing result size\n");
   iree_byte_span_t results = iree_make_byte_span(NULL, 0);
-  IREE_RETURN_AND_END_ZONE_IF_ERROR(
-      z0, iree_vm_function_call_compute_cconv_fragment_size(
-              cconv_results, /*segment_size_list=*/NULL, &results.data_length));
+  status = iree_vm_function_call_compute_cconv_fragment_size(
+      cconv_results, /*segment_size_list=*/NULL, &results.data_length);
+  if (!iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: compute_cconv_fragment_size (results) failed, status=%d\n", (int)iree_status_code(status));
+    iree_vm_invoke_release_argument_storage(cconv_arguments, arguments,
+                                            arguments_on_heap, host_allocator);
+    IREE_TRACE_ZONE_END(z0);
+    return status;
+  }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: results.data_length=%d\n", (int)results.data_length);
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: sizeof(state->stack_storage)=%d\n", (int)sizeof(state->stack_storage));
   iree_host_size_t reserved_storage_size = 0;
   if (results.data_length <= sizeof(state->stack_storage) / 4) {
     // Results fit in the inlined storage and we can avoid a heap allocation.
     // If we exceed the maximum we'll heap allocate below inside the stack.
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: allocating results in stack_storage\n");
     results.data = state->stack_storage;
     reserved_storage_size =
         iree_host_align(results.data_length, iree_max_align_t);
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: reserved_storage_size=%d\n", (int)reserved_storage_size);
   } else {
     // Couldn't inline, do a heap allocation we'll have to hang on to and
     // clean up when the invocation state is released.
-    IREE_RETURN_AND_END_ZONE_IF_ERROR(
-        z0, iree_allocator_malloc(host_allocator, results.data_length,
-                                  (void**)&results.data));
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: allocating results on heap\n");
+    status = iree_allocator_malloc(host_allocator, results.data_length,
+                                  (void**)&results.data);
+    if (!iree_status_is_ok(status)) {
+      fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: malloc (results) failed, status=%d\n", (int)iree_status_code(status));
+      iree_vm_invoke_release_argument_storage(cconv_arguments, arguments,
+                                              arguments_on_heap, host_allocator);
+      IREE_TRACE_ZONE_END(z0);
+      return status;
+    }
   }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: results.data=0x%p\n", (void*)results.data);
   memset(results.data, 0, results.data_length);
 
   // Marshal the input arguments into the VM ABI and preallocate the result
   // buffer. If marshaling fails we need to cleanup the arguments.
   // NOTE: today we don't support variadic arguments through this interface.
-  iree_status_t status =
-      iree_vm_invoke_marshal_inputs(cconv_arguments, inputs, arguments);
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: marshaling inputs\n");
+  status = iree_vm_invoke_marshal_inputs(cconv_arguments, inputs, arguments);
   if (!iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: marshal_inputs failed, status=%d\n", (int)iree_status_code(status));
     iree_vm_invoke_release_argument_storage(cconv_arguments, arguments,
                                             arguments_on_heap, host_allocator);
     iree_vm_invoke_release_result_storage(cconv_results, results,
@@ -463,16 +594,21 @@ IREE_API_EXPORT iree_status_t iree_vm_begin_invoke(
     IREE_TRACE_ZONE_END(z0);
     return status;
   }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: inputs marshaled successfully\n");
 
   // Initialize the stack with the inline storage.
   // We (probably) sliced off the head of the storage above to use for results
   // and perform an offset here to account for that.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: initializing stack\n");
+  fprintf(stdout, "[DEBUG]   stack_storage offset: %d\n", (int)reserved_storage_size);
+  fprintf(stdout, "[DEBUG]   stack_storage remaining: %d\n", (int)(sizeof(state->stack_storage) - reserved_storage_size));
   iree_vm_stack_t* stack = NULL;
   status = iree_vm_stack_initialize(
       iree_make_byte_span(state->stack_storage + reserved_storage_size,
                           sizeof(state->stack_storage) - reserved_storage_size),
       flags, iree_vm_context_state_resolver(context), host_allocator, &stack);
   if (!iree_status_is_ok(status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: stack_initialize failed, status=%d\n", (int)iree_status_code(status));
     iree_vm_invoke_release_argument_storage(cconv_arguments, arguments,
                                             arguments_on_heap, host_allocator);
     iree_vm_invoke_release_result_storage(cconv_results, results,
@@ -480,15 +616,18 @@ IREE_API_EXPORT iree_status_t iree_vm_begin_invoke(
     IREE_TRACE_ZONE_END(z0);
     return status;
   }
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: stack initialized, stack=0x%p\n", (void*)stack);
 
   // NOTE: at this point the stack must be properly deinitialized if we bail.
 
   // Initialize state now that we are confident we're returning OK.
   // If we return a failure the user won't know they have to end() and clean
   // these up.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: initializing state\n");
   state->context = context;
   state->cconv_results = cconv_results;
   state->results = results;
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: retaining context\n");
   iree_vm_context_retain(context);
   state->stack = stack;
 
@@ -499,16 +638,24 @@ IREE_API_EXPORT iree_status_t iree_vm_begin_invoke(
   // Execute the target function until the first yield point is reached or it
   // completes. A result of OK indicates successful completion while DEFERRED
   // indicates that the invocation needs to be resumed/waited again.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: preparing function call\n");
+  fprintf(stdout, "[DEBUG]   function.module->begin_call: 0x%p\n", (void*)function.module->begin_call);
+  fprintf(stdout, "[DEBUG]   function.module->self: 0x%p\n", (void*)function.module->self);
+  fprintf(stdout, "[DEBUG]   call.arguments.data: 0x%p, length=%d\n", (void*)arguments.data, (int)arguments.data_length);
+  fprintf(stdout, "[DEBUG]   call.results.data: 0x%p, length=%d\n", (void*)results.data, (int)results.data_length);
   iree_vm_function_call_t call = {
       .function = function,
       .arguments = arguments,
       .results = results,
   };
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: calling function.module->begin_call\n");
   state->status =
       function.module->begin_call(function.module->self, stack, call);
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: begin_call returned, status=%d\n", (int)iree_status_code(state->status));
 
   // Arguments should no longer be required - they were either consumed by the
   // begin_call or need to be cleaned up before we return.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: releasing argument storage\n");
   iree_vm_invoke_release_argument_storage(cconv_arguments, call.arguments,
                                           arguments_on_heap, host_allocator);
 
@@ -516,10 +663,12 @@ IREE_API_EXPORT iree_status_t iree_vm_begin_invoke(
   // for a wait operation (in which case the top of the stack will have a wait
   // frame).
   if (iree_status_is_deferred(state->status)) {
+    fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: status is DEFERRED\n");
     return iree_status_from_code(IREE_STATUS_DEFERRED);
   }
 
   // NOTE: the begin-invoke was ok, but the operation itself may have failed.
+  fprintf(stdout, "[DEBUG] iree_vm_begin_invoke: completed successfully\n");
   return iree_ok_status();
 }
 

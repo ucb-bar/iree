@@ -31,14 +31,19 @@ extern iree_status_t create_sample_device(iree_allocator_t host_allocator,
 extern const iree_const_byte_span_t load_bytecode_module_data();
 
 iree_status_t Run() {
+  fprintf(stdout, "[DEBUG] Starting Run()\n");
   iree_vm_instance_t* instance = NULL;
+  fprintf(stdout, "[DEBUG] Creating VM instance\n");
   IREE_RETURN_IF_ERROR(iree_vm_instance_create(
       IREE_VM_TYPE_CAPACITY_DEFAULT, iree_allocator_system(), &instance));
+  fprintf(stdout, "[DEBUG] Registering HAL module types\n");
   IREE_RETURN_IF_ERROR(iree_hal_module_register_all_types(instance));
 
   iree_hal_device_t* device = NULL;
+  fprintf(stdout, "[DEBUG] Creating sample device\n");
   IREE_RETURN_IF_ERROR(create_sample_device(iree_allocator_system(), &device),
                        "create device");
+  fprintf(stdout, "[DEBUG] Creating HAL module\n");
   iree_vm_module_t* hal_module = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_module_create(
       instance, iree_hal_module_device_policy_default(), /*device_count=*/1,
@@ -47,7 +52,9 @@ iree_status_t Run() {
       &hal_module));
 
   // Load bytecode module from the embedded data.
+  fprintf(stdout, "[DEBUG] Loading bytecode module data\n");
   const iree_const_byte_span_t module_data = load_bytecode_module_data();
+  fprintf(stdout, "[DEBUG] Creating bytecode module (size: %d bytes)\n", (int)module_data.data_length);
 
   iree_vm_module_t* bytecode_module = NULL;
   IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
@@ -55,11 +62,13 @@ iree_status_t Run() {
       &bytecode_module));
 
   // Allocate a context that will hold the module state across invocations.
+  fprintf(stdout, "[DEBUG] Creating VM context with modules\n");
   iree_vm_context_t* context = NULL;
   iree_vm_module_t* modules[] = {hal_module, bytecode_module};
   IREE_RETURN_IF_ERROR(iree_vm_context_create_with_modules(
       instance, IREE_VM_CONTEXT_FLAG_NONE, IREE_ARRAYSIZE(modules), &modules[0],
       iree_allocator_system(), &context));
+  fprintf(stdout, "[DEBUG] Releasing module references\n");
   iree_vm_module_release(hal_module);
   iree_vm_module_release(bytecode_module);
 
@@ -67,19 +76,23 @@ iree_status_t Run() {
   // Note that we use the synchronous variant which operates on pure type/shape
   // erased buffers.
   const char kMainFunctionName[] = "module.simple_mul";
+  fprintf(stdout, "[DEBUG] Looking up entry point function: %s\n", kMainFunctionName);
   iree_vm_function_t main_function;
   IREE_RETURN_IF_ERROR(iree_vm_context_resolve_function(
       context, iree_make_cstring_view(kMainFunctionName), &main_function));
+  fprintf(stdout, "[DEBUG] Entry point function resolved successfully\n");
 
   // Initial buffer contents for 4 * 2 = 8.
   const float kFloat4[] = {4.0f, 4.0f, 4.0f, 4.0f};
   const float kFloat2[] = {2.0f, 2.0f, 2.0f, 2.0f};
+  fprintf(stdout, "[DEBUG] Preparing input buffers (shape: [%d])\n", (int)IREE_ARRAYSIZE(kFloat4));
 
   // Allocate buffers in device-local memory so that if the device has an
   // independent address space they live on the fast side of the fence.
   iree_hal_dim_t shape[1] = {IREE_ARRAYSIZE(kFloat4)};
   iree_hal_buffer_view_t* arg0_buffer_view = NULL;
   iree_hal_buffer_view_t* arg1_buffer_view = NULL;
+  fprintf(stdout, "[DEBUG] Allocating buffer for arg0\n");
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -88,6 +101,7 @@ iree_status_t Run() {
           .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
       },
       iree_make_const_byte_span(kFloat4, sizeof(kFloat4)), &arg0_buffer_view));
+  fprintf(stdout, "[DEBUG] Allocating buffer for arg1\n");
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -98,6 +112,7 @@ iree_status_t Run() {
       iree_make_const_byte_span(kFloat2, sizeof(kFloat2)), &arg1_buffer_view));
 
   // Setup call inputs with our buffers.
+  fprintf(stdout, "[DEBUG] Setting up call inputs\n");
   iree_vm_list_t* inputs = NULL;
   IREE_RETURN_IF_ERROR(
       iree_vm_list_create(iree_vm_make_undefined_type_def(),
@@ -108,13 +123,16 @@ iree_status_t Run() {
       iree_hal_buffer_view_move_ref(arg0_buffer_view);
   iree_vm_ref_t arg1_buffer_view_ref =
       iree_hal_buffer_view_move_ref(arg1_buffer_view);
+  fprintf(stdout, "[DEBUG] Pushing arg0 to input list\n");
   IREE_RETURN_IF_ERROR(
       iree_vm_list_push_ref_move(inputs, &arg0_buffer_view_ref));
+  fprintf(stdout, "[DEBUG] Pushing arg1 to input list\n");
   IREE_RETURN_IF_ERROR(
       iree_vm_list_push_ref_move(inputs, &arg1_buffer_view_ref));
 
   // Prepare outputs list to accept the results from the invocation.
   // The output vm list is allocated statically.
+  fprintf(stdout, "[DEBUG] Preparing outputs list\n");
   iree_vm_list_t* outputs = NULL;
   IREE_RETURN_IF_ERROR(
       iree_vm_list_create(iree_vm_make_undefined_type_def(),
@@ -122,11 +140,14 @@ iree_status_t Run() {
       "can't allocate output vm list");
 
   // Synchronously invoke the function.
+  fprintf(stdout, "[DEBUG] Invoking function\n");
   IREE_RETURN_IF_ERROR(iree_vm_invoke(
       context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
       /*policy=*/NULL, inputs, outputs, iree_allocator_system()));
+  fprintf(stdout, "[DEBUG] Function invocation completed\n");
 
   // Get the result buffers from the invocation.
+  fprintf(stdout, "[DEBUG] Getting result buffer from outputs\n");
   iree_hal_buffer_view_t* ret_buffer_view =
       iree_vm_list_get_buffer_view_assign(outputs, 0);
   if (ret_buffer_view == NULL) {
@@ -135,26 +156,33 @@ iree_status_t Run() {
   }
 
   // Read back the results and ensure we got the right values.
+  fprintf(stdout, "[DEBUG] Transferring results from device to host\n");
   float results[] = {0.0f, 0.0f, 0.0f, 0.0f};
   IREE_RETURN_IF_ERROR(iree_hal_device_transfer_d2h(
       device, iree_hal_buffer_view_buffer(ret_buffer_view), 0, results,
       sizeof(results), IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT,
       iree_infinite_timeout()));
+  fprintf(stdout, "[DEBUG] Verifying results\n");
   for (iree_host_size_t i = 0; i < IREE_ARRAYSIZE(results); ++i) {
+    fprintf(stdout, "[DEBUG]   results[%d] = %f\n", (int)i, results[i]);
     if (results[i] != 8.0f) {
       return iree_make_status(IREE_STATUS_UNKNOWN, "result mismatches");
     }
   }
+  fprintf(stdout, "[DEBUG] All results verified successfully\n");
 
+  fprintf(stdout, "[DEBUG] Cleaning up resources\n");
   iree_vm_list_release(inputs);
   iree_vm_list_release(outputs);
   iree_hal_device_release(device);
   iree_vm_context_release(context);
   iree_vm_instance_release(instance);
+  fprintf(stdout, "[DEBUG] Run() completed successfully\n");
   return iree_ok_status();
 }
 
 int main() {
+  fprintf(stdout, "simple_embedding started\n");
   const iree_status_t result = Run();
   int ret = (int)iree_status_code(result);
   if (!iree_status_is_ok(result)) {

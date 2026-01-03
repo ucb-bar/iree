@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "iree/base/attributes.h"
@@ -339,12 +340,18 @@ static inline void iree_unaligned_store_le_u8(uint8_t* ptr, uint8_t value) {
 
 static inline uint16_t iree_unaligned_load_le_u16(const uint16_t* ptr) {
   uint16_t value;
-  memcpy(&value, ptr, sizeof(value));
+  const uint8_t* src = (const uint8_t*)ptr;
+  uint8_t* dst = (uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
   return value;
 }
 
 static inline void iree_unaligned_store_le_u16(uint16_t* ptr, uint16_t value) {
-  memcpy(ptr, &value, sizeof(value));
+  uint8_t* dst = (uint8_t*)ptr;
+  const uint8_t* src = (const uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
 }
 
 #else
@@ -367,20 +374,40 @@ static inline void iree_unaligned_store_le_u16(uint16_t* ptr, uint16_t value) {
 
 static inline uint32_t iree_unaligned_load_le_u32(const uint32_t* ptr) {
   uint32_t value;
-  memcpy(&value, ptr, sizeof(value));
+  const uint8_t* src = (const uint8_t*)ptr;
+  uint8_t* dst = (uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
   return value;
 }
 static inline float iree_unaligned_load_le_f32(const float* ptr) {
   float value;
-  memcpy(&value, ptr, sizeof(value));
+  const uint8_t* src = (const uint8_t*)ptr;
+  uint8_t* dst = (uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
   return value;
 }
 
 static inline void iree_unaligned_store_le_u32(uint32_t* ptr, uint32_t value) {
-  memcpy(ptr, &value, sizeof(value));
+  uint8_t* dst = (uint8_t*)ptr;
+  const uint8_t* src = (const uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
 }
 static inline void iree_unaligned_store_le_f32(float* ptr, float value) {
-  memcpy(ptr, &value, sizeof(value));
+  uint8_t* dst = (uint8_t*)ptr;
+  const uint8_t* src = (const uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
 }
 
 #else
@@ -405,20 +432,56 @@ static inline void iree_unaligned_store_le_f32(float* ptr, float value) {
 
 static inline uint64_t iree_unaligned_load_le_u64(const uint64_t* ptr) {
   uint64_t value;
-  memcpy(&value, ptr, sizeof(value));
+  const uint8_t* src = (const uint8_t*)ptr;
+  uint8_t* dst = (uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
+  dst[4] = src[4];
+  dst[5] = src[5];
+  dst[6] = src[6];
+  dst[7] = src[7];
   return value;
 }
 static inline double iree_unaligned_load_le_f64(const double* ptr) {
   double value;
-  memcpy(&value, ptr, sizeof(value));
+  const uint8_t* src = (const uint8_t*)ptr;
+  uint8_t* dst = (uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
+  dst[4] = src[4];
+  dst[5] = src[5];
+  dst[6] = src[6];
+  dst[7] = src[7];
   return value;
 }
 
 static inline void iree_unaligned_store_le_u64(uint64_t* ptr, uint64_t value) {
-  memcpy(ptr, &value, sizeof(value));
+  uint8_t* dst = (uint8_t*)ptr;
+  const uint8_t* src = (const uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
+  dst[4] = src[4];
+  dst[5] = src[5];
+  dst[6] = src[6];
+  dst[7] = src[7];
 }
 static inline void iree_unaligned_store_le_f64(double* ptr, double value) {
-  memcpy(&value, ptr, sizeof(value));
+  uint8_t* dst = (uint8_t*)ptr;
+  const uint8_t* src = (const uint8_t*)&value;
+  dst[0] = src[0];
+  dst[1] = src[1];
+  dst[2] = src[2];
+  dst[3] = src[3];
+  dst[4] = src[4];
+  dst[5] = src[5];
+  dst[6] = src[6];
+  dst[7] = src[7];
 }
 
 #else

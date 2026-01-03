@@ -111,6 +111,9 @@ if (NOT (IREE_ARCH STREQUAL "riscv_64"))
   return()
 endif()
 
+include(CheckCXXCompilerFlag)
+include(CheckCSourceCompiles)
+
 iree_select_compiler_opts(IREE_UK_COPTS_RISCV_64_V
   CLANG_OR_GCC
     "-march=rv64gv"
