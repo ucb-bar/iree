@@ -115,6 +115,7 @@ void buildGlobalOptimizationPassPipeline(
   FunctionLikeNest(mainPassManager)
       .addPredicatedPass(transformOptions.stripAssertions,
                          IREE::Util::createStripDebugOpsPass)
+      //.addPass(createFuseQuantizedMatmulBiasPass)
       .addPass(IREE::Util::createOptimizeIntArithmeticPass)
       .addPass(createLinalgQuantizedConvToConvPass)
       .addPass(createLinalgQuantizedMatmulToMatmulPass)

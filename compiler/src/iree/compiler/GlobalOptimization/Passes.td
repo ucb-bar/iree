@@ -81,6 +81,11 @@ def FuseDequantizationMatmulPass:
   let summary = "Fuses dequantization and matmul linalg.generic ops.";
 }
 
+//def FuseQuantizedMatmulBiasPass :
+//    InterfacePass<"iree-global-opt-fuse-quantized-matmul-bias", "mlir::FunctionOpInterface"> {
+//  let summary = "Fuses (qgemm+dequant) + (bias+dequant) into (qgemm+bias_i32)+dequant";
+//}
+
 def GeneralizeLinalgNamedOpsPass :
     InterfacePass<"iree-global-opt-generalize-linalg-named-ops", "mlir::FunctionOpInterface"> {
   let summary = "Convert some Linalg named ops into linalg.generics.";
