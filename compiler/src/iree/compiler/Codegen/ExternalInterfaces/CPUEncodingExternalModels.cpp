@@ -429,6 +429,7 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
     // leading to a very high padding overhead
     int N0 = vlen / 8;
     return {
+        TileMxNxK{8, 8, 8},
         TileMxNxK{7, N0, 1}, // Aim to use vfmacc, 100% register utilization.
         TileMxNxK{4, N0, 1}, // Truncation of the above.
         TileMxNxK{2, N0, 1}, // Truncation of the above.

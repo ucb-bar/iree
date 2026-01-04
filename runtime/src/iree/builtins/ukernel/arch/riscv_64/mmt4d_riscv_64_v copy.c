@@ -1,0 +1,314 @@
+// Copyright 2025 The IREE Authors
+//
+// Licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+#include <riscv_vector.h>
+
+#include "iree/builtins/ukernel/arch/riscv_64/common_riscv_64.h"
+#include "iree/builtins/ukernel/arch/riscv_64/mmt4d_riscv_64_internal.h"
+#include "bme.h"
+
+extern int printf(const char* format, ...);
+
+IREE_UK_ATTRIBUTE_ALWAYS_INLINE static inline void
+iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v(
+    void* IREE_UK_RESTRICT out_tile, const void* IREE_UK_RESTRICT lhs_panel,
+    const void* IREE_UK_RESTRICT rhs_panel,
+    const iree_uk_mmt4d_params_t* params, int M0) {
+  IREE_UK_ASSERT(M0 >= 1 && M0 <= 7);
+  const float* IREE_UK_RESTRICT lhs_ptr = lhs_panel;
+  const float* IREE_UK_RESTRICT rhs_ptr = rhs_panel;
+  float* IREE_UK_RESTRICT out_ptr = out_tile;
+
+  vfloat32m4_t acc0, acc1, acc2, acc3, acc4, acc5, acc6;
+
+  int N0 = params->N0;
+  size_t vl = N0;
+  if (M0 == 1) {
+    if (params->flags & IREE_UK_FLAG_MMT4D_ACCUMULATE) {
+      acc0 = __riscv_vle32_v_f32m4(out_ptr, vl);
+    } else {
+      acc0 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+    }
+    for (int k = 0; k < params->K; ++k) {
+      vfloat32m4_t rhs = __riscv_vle32_v_f32m4(rhs_ptr, vl);
+      rhs_ptr += N0;
+      float lhs = *lhs_ptr++;
+      acc0 = __riscv_vfmacc_vf_f32m4(acc0, lhs, rhs, vl);
+    }
+    __riscv_vse32_v_f32m4(out_ptr, acc0, vl);
+  } else if (M0 == 2) {
+    if (params->flags & IREE_UK_FLAG_MMT4D_ACCUMULATE) {
+      acc0 = __riscv_vle32_v_f32m4(out_ptr, vl);
+      acc1 = __riscv_vle32_v_f32m4(out_ptr + N0, vl);
+    } else {
+      acc0 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc1 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+    }
+    for (int k = 0; k < params->K; ++k) {
+      vfloat32m4_t rhs = __riscv_vle32_v_f32m4(rhs_ptr, vl);
+      rhs_ptr += N0;
+      float lhs[2];
+      IREE_UK_UNROLL for (int i = 0; i < M0; ++i) { lhs[i] = *lhs_ptr++; }
+      acc0 = __riscv_vfmacc_vf_f32m4(acc0, lhs[0], rhs, vl);
+      acc1 = __riscv_vfmacc_vf_f32m4(acc1, lhs[1], rhs, vl);
+    }
+    __riscv_vse32_v_f32m4(out_ptr, acc0, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0, acc1, vl);
+  } else if (M0 == 4) {
+    if (params->flags & IREE_UK_FLAG_MMT4D_ACCUMULATE) {
+      acc0 = __riscv_vle32_v_f32m4(out_ptr, vl);
+      acc1 = __riscv_vle32_v_f32m4(out_ptr + N0, vl);
+      acc2 = __riscv_vle32_v_f32m4(out_ptr + N0 * 2, vl);
+      acc3 = __riscv_vle32_v_f32m4(out_ptr + N0 * 3, vl);
+    } else {
+      acc0 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc1 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc2 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc3 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+    }
+    for (int k = 0; k < params->K; ++k) {
+      vfloat32m4_t rhs = __riscv_vle32_v_f32m4(rhs_ptr, vl);
+      rhs_ptr += N0;
+      float lhs[4];
+      IREE_UK_UNROLL for (int i = 0; i < M0; ++i) { lhs[i] = *lhs_ptr++; }
+      acc0 = __riscv_vfmacc_vf_f32m4(acc0, lhs[0], rhs, vl);
+      acc1 = __riscv_vfmacc_vf_f32m4(acc1, lhs[1], rhs, vl);
+      acc2 = __riscv_vfmacc_vf_f32m4(acc2, lhs[2], rhs, vl);
+      acc3 = __riscv_vfmacc_vf_f32m4(acc3, lhs[3], rhs, vl);
+    }
+    __riscv_vse32_v_f32m4(out_ptr, acc0, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0, acc1, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 2, acc2, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 3, acc3, vl);
+  } else if (M0 == 7) {
+    if (params->flags & IREE_UK_FLAG_MMT4D_ACCUMULATE) {
+      acc0 = __riscv_vle32_v_f32m4(out_ptr, vl);
+      acc1 = __riscv_vle32_v_f32m4(out_ptr + N0, vl);
+      acc2 = __riscv_vle32_v_f32m4(out_ptr + N0 * 2, vl);
+      acc3 = __riscv_vle32_v_f32m4(out_ptr + N0 * 3, vl);
+      acc4 = __riscv_vle32_v_f32m4(out_ptr + N0 * 4, vl);
+      acc5 = __riscv_vle32_v_f32m4(out_ptr + N0 * 5, vl);
+      acc6 = __riscv_vle32_v_f32m4(out_ptr + N0 * 6, vl);
+    } else {
+      acc0 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc1 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc2 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc3 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc4 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc5 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+      acc6 = __riscv_vfmv_v_f_f32m4(0.0, vl);
+    }
+    for (int k = 0; k < params->K; ++k) {
+      vfloat32m4_t rhs = __riscv_vle32_v_f32m4(rhs_ptr, vl);
+      rhs_ptr += N0;
+      float lhs[7];
+      IREE_UK_UNROLL for (int i = 0; i < M0; ++i) { lhs[i] = *lhs_ptr++; }
+      acc0 = __riscv_vfmacc_vf_f32m4(acc0, lhs[0], rhs, vl);
+      acc1 = __riscv_vfmacc_vf_f32m4(acc1, lhs[1], rhs, vl);
+      acc2 = __riscv_vfmacc_vf_f32m4(acc2, lhs[2], rhs, vl);
+      acc3 = __riscv_vfmacc_vf_f32m4(acc3, lhs[3], rhs, vl);
+      acc4 = __riscv_vfmacc_vf_f32m4(acc4, lhs[4], rhs, vl);
+      acc5 = __riscv_vfmacc_vf_f32m4(acc5, lhs[5], rhs, vl);
+      acc6 = __riscv_vfmacc_vf_f32m4(acc6, lhs[6], rhs, vl);
+    }
+    __riscv_vse32_v_f32m4(out_ptr, acc0, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0, acc1, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 2, acc2, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 3, acc3, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 4, acc4, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 5, acc5, vl);
+    __riscv_vse32_v_f32m4(out_ptr + N0 * 6, acc6, vl);
+  }
+}
+
+// --- DEBUG MACROS ---
+// Helper to dump an int8 vector register (LHS/RHS inputs). 
+// Uses LMUL=2 (m2) to match the load instructions.
+#define DBG_DUMP_VEC_I8_M2(VREG_NAME, COUNT, LABEL) do { \
+  int8_t tmp[64]; \
+  asm volatile("vse8.v " #VREG_NAME ", (%0)" : : "r"(tmp)); \
+  printf("    [DEBUG] %s (" #VREG_NAME "): [", LABEL); \
+  for(int _i=0; _i<(COUNT > 16 ? 16 : COUNT); ++_i) printf("%d ", tmp[_i]); \
+  printf("...]\n"); \
+} while(0)
+
+// Helper to dump an int32 accumulator row (Output).
+// Uses LMUL=1 because we extract row-by-row using VMV_VR into v0.
+#define DBG_DUMP_ACC_ROW(VREG_NAME, COUNT, ROW_IDX) do { \
+  int32_t tmp[64]; \
+  asm volatile("vse32.v " #VREG_NAME ", (%0)" : : "r"(tmp)); \
+  printf("    [DEBUG] Acc Row %d: [", ROW_IDX); \
+  for(int _i=0; _i<(COUNT > 8 ? 8 : COUNT); ++_i) printf("%d ", tmp[_i]); \
+  printf("...]\n"); \
+} while(0)
+// --------------------
+
+IREE_UK_ATTRIBUTE_ALWAYS_INLINE static inline void
+iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v(
+    void* IREE_UK_RESTRICT out_tile,
+    const void* IREE_UK_RESTRICT lhs_panel,
+    const void* IREE_UK_RESTRICT rhs_panel,
+    const iree_uk_mmt4d_params_t* params, int M0) {
+  
+  IREE_UK_ASSERT(M0 >= 1 && M0 <= 16);
+  iree_uk_int32_t* IREE_UK_RESTRICT out_ptr = out_tile;
+  const iree_uk_int8_t* IREE_UK_RESTRICT lhs_ptr = lhs_panel;
+  const iree_uk_int8_t* IREE_UK_RESTRICT rhs_ptr = rhs_panel;
+
+  const int N0 = params->N0;
+  const int K = params->K;
+  size_t ml = M0;
+  size_t vl = N0;
+
+  // Unconditional print to confirm the kernel is called
+  printf(">>> s8s8s32 Tile Entry: M0=%d, N0=%d, K=%d | Out=%p Lhs=%p Rhs=%p\n", 
+          M0, N0, K, out_ptr, lhs_ptr, rhs_ptr);
+
+  // ============================================================
+  // FAST PATH: M0 = 16 (Uses BME with LMUL=8 accumulators)
+  // ============================================================
+  if (M0 == 16) {
+    printf("  [PATH] Fast M0=16 (LMUL=8 accumulators)\n");
+
+    // 1. Initialize Accumulators (m0)
+    asm volatile("vsetvli zero, %0, e32, m8, ta, ma" : : "r"(vl));
+    asm volatile("vmv.v.i v0, 0"); // Clear v0-v7
+    OPMVINBCAST(m0, v0);           // Copy v0 to accumulator state 'm0'
+
+    // 2. Main Loop
+    size_t k = 0;
+    while (k + 2 <= K) {
+      if (k == 0) printf("  [LOOP] Starting unrolled loop k=0...\n");
+
+      // --- Iteration 1 ---
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(ml));  // ml=16
+      asm volatile("vle8.v v16, (%0)" : : "r"(&lhs_ptr[k * M0]));
+      
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(vl));  // vl=N0
+      asm volatile("vle8.v v18, (%0)" : : "r"(&rhs_ptr[k * N0]));
+      
+      // Dump inputs for the very first iteration
+      if (k == 0) {
+        DBG_DUMP_VEC_I8_M2(v16, 16, "LHS k=0");
+        DBG_DUMP_VEC_I8_M2(v18, 16, "RHS k=0");
+      }
+
+      VOPACC(m0, v18, v16); // Accumulate
+      k++;
+
+      // --- Iteration 2 ---
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(ml)); 
+      asm volatile("vle8.v v20, (%0)" : : "r"(&lhs_ptr[k * M0]));
+      
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(vl)); 
+      asm volatile("vle8.v v22, (%0)" : : "r"(&rhs_ptr[k * N0]));
+      
+      VOPACC(m0, v22, v20); // Accumulate
+      k++;
+    }
+
+    // 3. Tail Loop
+    if (k < K) {
+      printf("  [TAIL] Processing K tail at k=%zu\n", k);
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(ml));
+      asm volatile("vle8.v v16, (%0)" : : "r"(&lhs_ptr[k * M0]));
+      
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(vl));
+      asm volatile("vle8.v v18, (%0)" : : "r"(&rhs_ptr[k * N0]));
+      
+      VOPACC(m0, v18, v16);
+    }
+
+    // 4. Store Results
+    printf("  [STORE] Flushing accumulators to memory...\n");
+    asm volatile("vsetvli zero, %0, e32, m8, ta, ma" : : "r"(vl)); // Set VL for 32-bit elements
+    
+    for (size_t r = 0; r < ml; r++) {  // ml=16 rows
+      VMV_VR(v0, r, m0); // Extract row 'r' from accumulator 'm0' into register 'v0'
+      
+      // Debug output of the first and last row being written
+      if (r == 0 || r == ml - 1) {
+        DBG_DUMP_ACC_ROW(v0, N0, (int)r);
+      }
+
+      asm volatile("vse32.v v0, (%0)" : : "r"(&out_ptr[r * N0]));
+    }
+  }
+  // ============================================================
+  // TAIL PATH: M0 < 16 (Uses LMUL=4 accumulators)
+  // ============================================================
+  else {
+    printf("  [PATH] Tail M0=%d (LMUL=4 accumulators)\n", M0);
+
+    // 1. Initialize Accumulators (m3)
+    asm volatile("vsetvli zero, %0, e32, m4, ta, ma" : : "r"(vl));
+    asm volatile("vmv.v.i v0, 0");
+    OPMVINBCAST(m3, v0);  // Using m3 for tail path
+
+    // 2. Main K-Loop
+    for (int k = 0; k < K; ++k) {
+      asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(ml));
+      asm volatile("vle8.v v5, (%0)" : : "r"(&lhs_ptr[k * M0]));
+
+      asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(vl));
+      asm volatile("vle8.v v4, (%0)" : : "r"(&rhs_ptr[k * N0]));
+
+      if (k == 0) {
+         // Dump tail inputs (using registers v5 and v4)
+         int8_t tmp[32]; 
+         asm volatile("vse8.v v5, (%0)" : : "r"(tmp));
+         printf("    Tail k=0 LHS[0]=%d\n", tmp[0]);
+      }
+
+      VOPACC(m3, v4, v5);
+    }
+
+    // 3. Store Results
+    printf("  [STORE] Flushing tail accumulators...\n");
+    asm volatile("vsetvli zero, %0, e32, m4, ta, ma" : : "r"(vl));
+    
+    for (size_t r = 0; r < ml; r++) {
+      VMV_VR(v0, r, m3); // Extract row 'r' from 'm3' into 'v0'
+      
+      if (r == 0) DBG_DUMP_ACC_ROW(v0, N0, (int)r);
+
+      asm volatile("vse32.v v0, (%0)" : : "r"(&out_ptr[r * N0]));
+    }
+  }
+  printf("<<< EXIT Tile\n");
+}
+
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_f32f32f32_1xXXx1_riscv_64_v, 1)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_f32f32f32_2xXXx1_riscv_64_v, 2)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_f32f32f32_4xXXx1_riscv_64_v, 4)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_f32f32f32_7xXXx1_riscv_64_v, 7)
+
+
+// Point all s8s8s32 tiles to the new generic function
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_riscv_64_v, 1)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_2xXXx1_riscv_64_v, 2)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_4xXXx1_riscv_64_v, 4)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_8xXXx1_riscv_64_v, 8)
+// Add the new M0=16 tile
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_16xXXx1_riscv_64_v, 16)
