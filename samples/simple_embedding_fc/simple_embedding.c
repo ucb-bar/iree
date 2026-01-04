@@ -11,6 +11,20 @@
 #include "iree/modules/hal/module.h"
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode/module.h"
+#include <stdio.h>
+
+//#ifndef MSTATUS_VS
+//  #define MSTATUS_VS 0x00000600 // Vector Status (bits 9-10)
+//#endif
+//#ifndef MSTATUS_FS
+//  #define MSTATUS_FS 0x00006000 // Floating-point Status (bits 13-14)
+//#endif
+//#ifndef MSTATUS_XS
+//  #define MSTATUS_XS 0x00018000 // Extension Status (bits 15-16)
+//#endif
+
+// Declare the external enable function
+extern void iree_platform_enable_extensions();
 
 // A function to create the HAL device from the different backend targets.
 extern iree_status_t create_sample_device(iree_allocator_t host_allocator,
@@ -154,12 +168,50 @@ iree_status_t Run() {
   return status;
 }
 
+//static inline void enable_vector_operations() {
+//    unsigned long mstatus;
+//    
+//    // Read current mstatus
+//    asm volatile("csrr %0, mstatus" : "=r"(mstatus));
+//    
+//    // Set VS field to Dirty (11)
+//    mstatus |= MSTATUS_VS | MSTATUS_FS | MSTATUS_XS;
+//    
+//    // Write back updated mstatus
+//    asm volatile("csrw mstatus, %0" :: "r"(mstatus));
+//}
+
 int main() {
-  const iree_status_t result = Run();
-  int ret = (int)iree_status_code(result);
+    // 1. ENABLE FPU/VECTORS IMMEDIATELY
+    // If we don't do this, the first 'float' operation will crash with Illegal Instruction.
+
+    //enable_vector_operations();
+    //iree_platform_enable_extensions();
+
+    
   
-  // CHANGED: Ignore status (no printing on bare metal)
-  iree_status_ignore(result);
+    // 2. Debug Print (Flush immediately to ensure we see it)
+    printf("BOOT: Extensions Enabled.\n");
+    fflush(stdout);
   
-  return ret;
-}
+    printf("START: Run()\n");
+    fflush(stdout);
+  
+    const iree_status_t result = Run();
+  
+    if (iree_status_is_ok(result)) {
+        printf("SUCCESS: Run() completed.\n");
+    } else {
+        printf("FAILURE: Run() returned error.\n");
+        // Optional: print status code
+        int code = (int)iree_status_code(result);
+        printf("ERROR CODE: %d\n", code);
+    }
+    
+    fflush(stdout);
+    
+    // Ignore internal IREE status tracking for bare-metal exit
+    iree_status_ignore(result);
+    
+    return (int)iree_status_code(result);
+  }
