@@ -12,6 +12,8 @@
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode/module.h"
 #include <stdio.h>
+#include <stdint.h>
+
 
 //#ifndef MSTATUS_VS
 //  #define MSTATUS_VS 0x00000600 // Vector Status (bits 9-10)
@@ -22,6 +24,34 @@
 //#ifndef MSTATUS_XS
 //  #define MSTATUS_XS 0x00018000 // Extension Status (bits 15-16)
 //#endif
+
+// --- TRACE ENCODER DEFINITIONS (Must be BEFORE Run()) ---
+
+#define L_TRACE_ENCODER_BASE_ADDRESS 0x3000000
+
+typedef struct {
+  volatile uint32_t TR_TE_CTRL;        // 0x00
+  volatile uint32_t TR_TE_INFO;        // 0x04
+  volatile uint32_t TR_TE_BUBBLE[6];   // 0x08-0x1C
+  volatile uint32_t TR_TE_TARGET;      // 0x20
+  volatile uint32_t TR_TE_BRANCH_MODE; // 0x24
+} LTraceEncoderType;
+
+static inline void l_trace_encoder_start(uint32_t hart_id) {
+    // FIX: Cast base address to uintptr_t so it matches 64-bit pointer size
+    uintptr_t base_addr = (uintptr_t)L_TRACE_ENCODER_BASE_ADDRESS;
+    LTraceEncoderType *encoder = (LTraceEncoderType *)(base_addr + (hart_id * 0x1000));
+    
+    encoder->TR_TE_CTRL |= (0x1 << 1); 
+}
+
+static inline void l_trace_encoder_stop(uint32_t hart_id) {
+    // FIX: Cast base address to uintptr_t so it matches 64-bit pointer size
+    uintptr_t base_addr = (uintptr_t)L_TRACE_ENCODER_BASE_ADDRESS;
+    LTraceEncoderType *encoder = (LTraceEncoderType *)(base_addr + (hart_id * 0x1000));
+    
+    encoder->TR_TE_CTRL &= ~(0x1 << 1); 
+}
 
 // Declare the external enable function
 extern void iree_platform_enable_extensions();
@@ -125,6 +155,10 @@ iree_status_t Run() {
                           /*capacity=*/1, iree_allocator_system(), &outputs),
       "can't allocate output vm list");
 
+    // --- START TRACE ---
+  fprintf(stdout, "Starting Trace...\n");
+  l_trace_encoder_start(0);
+
   // Synchronously invoke the function.
   IREE_RETURN_IF_ERROR(iree_vm_invoke(
       context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
@@ -137,6 +171,10 @@ iree_status_t Run() {
     return iree_make_status(IREE_STATUS_NOT_FOUND,
                             "can't find return buffer view");
   }
+
+  // --- STOP TRACE ---
+  l_trace_encoder_stop(0);
+  fprintf(stdout, "Trace Stopped.\n");
 
   // Output reading for 16x10xf32
   const size_t kOutputElements = 16 * 10;
