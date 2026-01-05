@@ -203,6 +203,148 @@ iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v(
   }
 }
 
+
+IREE_UK_ATTRIBUTE_ALWAYS_INLINE static inline void
+iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl(
+    void* IREE_UK_RESTRICT out_tile, const void* IREE_UK_RESTRICT lhs_panel,
+    const void* IREE_UK_RESTRICT rhs_panel,
+    const iree_uk_mmt4d_params_t* params, int M0) {
+  
+  IREE_UK_ASSERT(M0 == 4 || M0 == 8);
+  const int8_t* lhs_ptr = (const int8_t*)lhs_panel;
+  const int8_t* rhs_ptr = (const int8_t*)rhs_panel;
+  int32_t* out_ptr = (int32_t*)out_tile;
+  int K = params->K;
+
+  // =======================================================================
+  // CASE 1: M0 = 4 (Single Tile)
+  // =======================================================================
+  if (M0 == 4) {
+    // Registers:
+    // v8-v9: Accumulator (4x4 int32) - Constraint: Even register
+    // v0:    LHS (4x8 int8)
+    // v4:    RHS (8x4 int8)
+
+    // 1. Initialize Accumulator
+    if (params->flags & IREE_UK_FLAG_MMT4D_ACCUMULATE) {
+        // Load 64 bytes (4x4 int32)
+        // m2 = 2 registers = 512 bits = 64 bytes
+        __asm__ volatile(
+            "vsetvli zero, zero, e32, m2, ta, ma \n"
+            "vle32.v v8, (%0)                    \n"
+            : : "r"(out_ptr) : "v8", "v9"
+        );
+    } else {
+        __asm__ volatile(
+            "vsetvli zero, zero, e32, m2, ta, ma \n"
+            "vmv.v.i v8, 0                       \n"
+            : : : "v8", "v9"
+        );
+    }
+
+    // 2. Main Loop (Unrolled x2 for pipeline efficiency if K is large enough)
+    // For simplicity and code size, we use a simple loop here. 
+    // The hardware processes 8 K-elements per instruction.
+    for (; K >= 8; K -= 8) {
+        __asm__ volatile(
+            // Config: e8, m1 (32 bytes per register)
+            "vsetvli zero, zero, e8, m1, ta, ma  \n"
+            
+            "vle8.v  v0, (%[lhs])                \n" // Load A (32B)
+            "vle8.v  v4, (%[rhs])                \n" // Load B (32B)
+            
+            // vmadot v8, v0, v4
+            // Instruction encoding: 111000 (func7) | 001 (SS) | ...
+            // Using assembler mnemonic if available, else .insn
+            "vmadot  v8, v0, v4                  \n"
+            
+            : 
+            : [lhs] "r"(lhs_ptr), [rhs] "r"(rhs_ptr)
+            : "v0", "v4", "v8", "v9"
+        );
+        lhs_ptr += 32;
+        rhs_ptr += 32;
+    }
+
+    // 3. Store Result
+    __asm__ volatile(
+        "vsetvli zero, zero, e32, m2, ta, ma \n"
+        "vse32.v v8, (%0)                    \n"
+        : : "r"(out_ptr) : "memory"
+    );
+  } 
+  // =======================================================================
+  // CASE 2: M0 = 8 (Two Tiles Stacked Vertically)
+  // =======================================================================
+  else if (M0 == 8) {
+    // We compute two 4x4 blocks: Top (rows 0-3) and Bottom (rows 4-7).
+    // They share the same RHS (B) data.
+    
+    // Registers:
+    // v8-v9:   Accumulator Top
+    // v10-v11: Accumulator Bottom
+    // v0:      LHS Top
+    // v1:      LHS Bottom (Separate register because v0 is m1)
+    // v4:      RHS (Shared)
+
+    // 1. Initialize Accumulators
+    if (params->flags & IREE_UK_FLAG_MMT4D_ACCUMULATE) {
+        __asm__ volatile(
+            "vsetvli zero, zero, e32, m2, ta, ma \n"
+            "vle32.v v8,  (%0)                   \n" // Top 64B
+            "addi    t0, %0, 64                  \n"
+            "vle32.v v10, (t0)                   \n" // Bot 64B
+            : : "r"(out_ptr) : "v8", "v9", "v10", "v11", "t0"
+        );
+    } else {
+        __asm__ volatile(
+            "vsetvli zero, zero, e32, m2, ta, ma \n"
+            "vmv.v.i v8, 0                       \n"
+            "vmv.v.i v10, 0                      \n"
+            : : : "v8", "v9", "v10", "v11"
+        );
+    }
+
+    // 2. Main Loop
+    for (; K >= 8; K -= 8) {
+        __asm__ volatile(
+            "vsetvli zero, zero, e8, m1, ta, ma  \n"
+            
+            // Load LHS (Top and Bottom)
+            // LHS is packed as 8x8 (M0xK0), so it is contiguous 64 bytes.
+            "vle8.v  v0, (%[lhs])                \n"
+            "addi    t0, %[lhs], 32              \n"
+            "vle8.v  v1, (t0)                    \n"
+            
+            // Load RHS (Shared)
+            "vle8.v  v4, (%[rhs])                \n"
+            
+            // Compute Top Tile
+            "vmadot  v8, v0, v4                  \n"
+            
+            // Compute Bottom Tile
+            "vmadot  v10, v1, v4                 \n"
+            
+            : 
+            : [lhs] "r"(lhs_ptr), [rhs] "r"(rhs_ptr)
+            : "v0", "v1", "v4", "v8", "v9", "v10", "v11", "t0"
+        );
+        lhs_ptr += 64; // 8x8 bytes
+        rhs_ptr += 32; // 4x8 bytes (RHS N0=4)
+    }
+
+    // 3. Store Results
+    __asm__ volatile(
+        "vsetvli zero, zero, e32, m2, ta, ma \n"
+        "vse32.v v8,  (%0)                   \n"
+        "addi    t0, %0, 64                  \n"
+        "vse32.v v10, (t0)                   \n"
+        : : "r"(out_ptr) : "memory", "t0"
+    );
+  }
+}
+
+
 IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
     iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
     iree_uk_mmt4d_tile_f32f32f32_1xXXx1_riscv_64_v, 1)
@@ -216,7 +358,7 @@ IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
     iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
     iree_uk_mmt4d_tile_f32f32f32_7xXXx1_riscv_64_v, 7)
 
-// *** UPDATED SECTION ***
+// OPU Saturn
 // Point all s8s8s32 tiles to the new generic function
 IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
     iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
@@ -234,3 +376,12 @@ IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
 IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
     iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
     iree_uk_mmt4d_tile_s8s8s32_16xXXx1_riscv_64_v, 16)
+
+// --- IME Registrations (Spacemit K1) ---
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+  iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl,   
+  iree_uk_mmt4d_tile_s8s8s32_4xXXx8_riscv_64_ime, 4)    
+
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+  iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl,   
+  iree_uk_mmt4d_tile_s8s8s32_8xXXx8_riscv_64_ime, 8)    

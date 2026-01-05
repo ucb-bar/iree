@@ -34,9 +34,13 @@ IREE_UK_MMT4D_TILE(riscv_64, f16, f16, f16, 4, 1, _zvfh)
 IREE_UK_MMT4D_TILE(riscv_64, f16, f16, f16, 7, 1, _zvfh)
 //IREE_UK_MMT4D_TILE(riscv_64, f16, f16, f16, 8, 8, _zvfh)
 
-// s8s8s32 tiles using the 'v' extension
+// s8s8s32 tiles using the 'v' extension for OPU
 IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 1, 1, _v)
 IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 2, 1, _v)
 IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 4, 1, _v)
 IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 8, 1, _v)
 IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 16, 1, _v)
+
+// SPACEMIT IME tiles for K1
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 4, 8, _ime)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 8, 8, _ime)
