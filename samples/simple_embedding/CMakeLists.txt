@@ -141,6 +141,7 @@ iree_bytecode_module(
     "--iree-llvmcpu-debug-symbols=false"
     "--iree-vm-bytecode-module-strip-source-map=true"
     "--iree-vm-emit-polyglot-zip=false"
+    "--iree-hal-dump-executable-files-to=${CMAKE_CURRENT_BINARY_DIR}/executable_files"
   PUBLIC
 )
 
