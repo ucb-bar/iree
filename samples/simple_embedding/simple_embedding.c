@@ -4,14 +4,6 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-// A example of setting up the HAL module to run simple pointwise array
-// multiplication with the device implemented by different backends via
-// create_sample_driver().
-//
-// NOTE: this file does not properly handle error cases and will leak on
-// failure. Applications that are just going to exit()/abort() on failure can
-// probably get away with the same thing but really should prefer not to.
-
 #include <stdio.h>
 
 #include "iree/base/api.h"
@@ -31,19 +23,14 @@ extern iree_status_t create_sample_device(iree_allocator_t host_allocator,
 extern const iree_const_byte_span_t load_bytecode_module_data();
 
 iree_status_t Run() {
-  fprintf(stdout, "[DEBUG] Starting Run()\n");
   iree_vm_instance_t* instance = NULL;
-  fprintf(stdout, "[DEBUG] Creating VM instance\n");
   IREE_RETURN_IF_ERROR(iree_vm_instance_create(
       IREE_VM_TYPE_CAPACITY_DEFAULT, iree_allocator_system(), &instance));
-  fprintf(stdout, "[DEBUG] Registering HAL module types\n");
   IREE_RETURN_IF_ERROR(iree_hal_module_register_all_types(instance));
 
   iree_hal_device_t* device = NULL;
-  fprintf(stdout, "[DEBUG] Creating sample device\n");
   IREE_RETURN_IF_ERROR(create_sample_device(iree_allocator_system(), &device),
                        "create device");
-  fprintf(stdout, "[DEBUG] Creating HAL module\n");
   iree_vm_module_t* hal_module = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_module_create(
       instance, iree_hal_module_device_policy_default(), /*device_count=*/1,
@@ -52,9 +39,7 @@ iree_status_t Run() {
       &hal_module));
 
   // Load bytecode module from the embedded data.
-  fprintf(stdout, "[DEBUG] Loading bytecode module data\n");
   const iree_const_byte_span_t module_data = load_bytecode_module_data();
-  fprintf(stdout, "[DEBUG] Creating bytecode module (size: %d bytes)\n", (int)module_data.data_length);
 
   iree_vm_module_t* bytecode_module = NULL;
   IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
@@ -62,37 +47,45 @@ iree_status_t Run() {
       &bytecode_module));
 
   // Allocate a context that will hold the module state across invocations.
-  fprintf(stdout, "[DEBUG] Creating VM context with modules\n");
   iree_vm_context_t* context = NULL;
   iree_vm_module_t* modules[] = {hal_module, bytecode_module};
   IREE_RETURN_IF_ERROR(iree_vm_context_create_with_modules(
       instance, IREE_VM_CONTEXT_FLAG_NONE, IREE_ARRAYSIZE(modules), &modules[0],
       iree_allocator_system(), &context));
-  fprintf(stdout, "[DEBUG] Releasing module references\n");
   iree_vm_module_release(hal_module);
   iree_vm_module_release(bytecode_module);
 
   // Lookup the entry point function.
-  // Note that we use the synchronous variant which operates on pure type/shape
-  // erased buffers.
-  const char kMainFunctionName[] = "module.simple_mul";
-  fprintf(stdout, "[DEBUG] Looking up entry point function: %s\n", kMainFunctionName);
+  // We use "module.vanilla_matmul" which takes 3 arguments: (A, B, C).
+  const char kMainFunctionName[] = "module.vanilla_matmul";
   iree_vm_function_t main_function;
   IREE_RETURN_IF_ERROR(iree_vm_context_resolve_function(
       context, iree_make_cstring_view(kMainFunctionName), &main_function));
-  fprintf(stdout, "[DEBUG] Entry point function resolved successfully\n");
 
-  // Initial buffer contents for 4 * 2 = 8.
-  const float kFloat4[] = {4.0f, 4.0f, 4.0f, 4.0f};
-  const float kFloat2[] = {2.0f, 2.0f, 2.0f, 2.0f};
-  fprintf(stdout, "[DEBUG] Preparing input buffers (shape: [%d])\n", (int)IREE_ARRAYSIZE(kFloat4));
+  // --- 1. PREPARE DATA ---
+  // We need 8x8 = 64 elements for the full register utilization test.
+  // A (Filled with 4.0f)
+  float kFloat4[64];
+  for (int i = 0; i < 64; ++i) kFloat4[i] = 4.0f;
 
-  // Allocate buffers in device-local memory so that if the device has an
-  // independent address space they live on the fast side of the fence.
-  iree_hal_dim_t shape[1] = {IREE_ARRAYSIZE(kFloat4)};
+  // B (Filled with 2.0f)
+  float kFloat2[64];
+  for (int i = 0; i < 64; ++i) kFloat2[i] = 2.0f;
+
+  // C (Accumulator, Filled with 0.0f)
+  // This corresponds to the `outs(%C)` in the MLIR.
+  float kFloatZero[64];
+  for (int i = 0; i < 64; ++i) kFloatZero[i] = 0.0f;
+
+  // --- 2. ALLOCATE BUFFERS ---
+  // Rank 2 shape: 8x8
+  iree_hal_dim_t shape[2] = {8, 8};
+  
   iree_hal_buffer_view_t* arg0_buffer_view = NULL;
   iree_hal_buffer_view_t* arg1_buffer_view = NULL;
-  fprintf(stdout, "[DEBUG] Allocating buffer for arg0\n");
+  iree_hal_buffer_view_t* arg2_buffer_view = NULL; // New for input C
+
+  // Allocate Input A
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -101,7 +94,8 @@ iree_status_t Run() {
           .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
       },
       iree_make_const_byte_span(kFloat4, sizeof(kFloat4)), &arg0_buffer_view));
-  fprintf(stdout, "[DEBUG] Allocating buffer for arg1\n");
+
+  // Allocate Input B
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -111,43 +105,53 @@ iree_status_t Run() {
       },
       iree_make_const_byte_span(kFloat2, sizeof(kFloat2)), &arg1_buffer_view));
 
-  // Setup call inputs with our buffers.
-  fprintf(stdout, "[DEBUG] Setting up call inputs\n");
+  // Allocate Input C (Accumulator)
+  IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
+      device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
+      IREE_HAL_ELEMENT_TYPE_FLOAT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
+      (iree_hal_buffer_params_t){
+          .type = IREE_HAL_MEMORY_TYPE_DEVICE_LOCAL,
+          .usage = IREE_HAL_BUFFER_USAGE_DEFAULT,
+      },
+      iree_make_const_byte_span(kFloatZero, sizeof(kFloatZero)), &arg2_buffer_view));
+
+  // --- 3. BUILD INPUT LIST ---
   iree_vm_list_t* inputs = NULL;
   IREE_RETURN_IF_ERROR(
       iree_vm_list_create(iree_vm_make_undefined_type_def(),
-                          /*capacity=*/2, iree_allocator_system(), &inputs),
+                          /*capacity=*/3, // CHANGED: We now have 3 inputs
+                          iree_allocator_system(), &inputs),
       "can't allocate input vm list");
 
-  iree_vm_ref_t arg0_buffer_view_ref =
-      iree_hal_buffer_view_move_ref(arg0_buffer_view);
-  iree_vm_ref_t arg1_buffer_view_ref =
-      iree_hal_buffer_view_move_ref(arg1_buffer_view);
-  fprintf(stdout, "[DEBUG] Pushing arg0 to input list\n");
-  IREE_RETURN_IF_ERROR(
-      iree_vm_list_push_ref_move(inputs, &arg0_buffer_view_ref));
-  fprintf(stdout, "[DEBUG] Pushing arg1 to input list\n");
-  IREE_RETURN_IF_ERROR(
-      iree_vm_list_push_ref_move(inputs, &arg1_buffer_view_ref));
+  iree_vm_ref_t arg0_ref = iree_hal_buffer_view_move_ref(arg0_buffer_view);
+  iree_vm_ref_t arg1_ref = iree_hal_buffer_view_move_ref(arg1_buffer_view);
+  iree_vm_ref_t arg2_ref = iree_hal_buffer_view_move_ref(arg2_buffer_view);
+
+  IREE_RETURN_IF_ERROR(iree_vm_list_push_ref_move(inputs, &arg0_ref));
+  IREE_RETURN_IF_ERROR(iree_vm_list_push_ref_move(inputs, &arg1_ref));
+  IREE_RETURN_IF_ERROR(iree_vm_list_push_ref_move(inputs, &arg2_ref));
 
   // Prepare outputs list to accept the results from the invocation.
-  // The output vm list is allocated statically.
-  fprintf(stdout, "[DEBUG] Preparing outputs list\n");
   iree_vm_list_t* outputs = NULL;
   IREE_RETURN_IF_ERROR(
       iree_vm_list_create(iree_vm_make_undefined_type_def(),
                           /*capacity=*/1, iree_allocator_system(), &outputs),
       "can't allocate output vm list");
+  
+  // --- START TRACE ---
+  fprintf(stdout, "Starting Trace...\n");
+  l_trace_encoder_start(0);
 
-  // Synchronously invoke the function.
-  fprintf(stdout, "[DEBUG] Invoking function\n");
+  // --- 4. INVOKE ---
   IREE_RETURN_IF_ERROR(iree_vm_invoke(
       context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
       /*policy=*/NULL, inputs, outputs, iree_allocator_system()));
-  fprintf(stdout, "[DEBUG] Function invocation completed\n");
+
+  // --- STOP TRACE ---
+  l_trace_encoder_stop(0);
+  fprintf(stdout, "Trace Stopped.\n");
 
   // Get the result buffers from the invocation.
-  fprintf(stdout, "[DEBUG] Getting result buffer from outputs\n");
   iree_hal_buffer_view_t* ret_buffer_view =
       iree_vm_list_get_buffer_view_assign(outputs, 0);
   if (ret_buffer_view == NULL) {
@@ -155,40 +159,48 @@ iree_status_t Run() {
                             "can't find return buffer view");
   }
 
-  // Read back the results and ensure we got the right values.
-  fprintf(stdout, "[DEBUG] Transferring results from device to host\n");
-  float results[] = {0.0f, 0.0f, 0.0f, 0.0f};
+  // --- 5. VERIFY RESULTS ---
+  // Read back 64 floats (8x8).
+  float results[64];
+  // Initialize to zero to ensure we are reading fresh data
+  for(int i=0; i<64; ++i) results[i] = 0.0f;
+
   IREE_RETURN_IF_ERROR(iree_hal_device_transfer_d2h(
       device, iree_hal_buffer_view_buffer(ret_buffer_view), 0, results,
       sizeof(results), IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT,
       iree_infinite_timeout()));
-  fprintf(stdout, "[DEBUG] Verifying results\n");
+
+  // Verification Logic:
+  // Row of A (all 4.0) dot Column of B (all 2.0).
+  // Length is 8.
+  // Result = 8 * (4.0 * 2.0) = 8 * 8.0 = 64.0.
   for (iree_host_size_t i = 0; i < IREE_ARRAYSIZE(results); ++i) {
-    fprintf(stdout, "[DEBUG]   results[%d] = %f\n", (int)i, results[i]);
-    if (results[i] != 8.0f) {
-      return iree_make_status(IREE_STATUS_UNKNOWN, "result mismatches");
+    if (results[i] != 64.0f) {
+        fprintf(stderr, "Result mismatch at index %zu: Expected 64.0f, got %f\n", i, results[i]);
+        return iree_make_status(IREE_STATUS_UNKNOWN, "result mismatches");
     }
   }
-  fprintf(stdout, "[DEBUG] All results verified successfully\n");
 
-  fprintf(stdout, "[DEBUG] Cleaning up resources\n");
   iree_vm_list_release(inputs);
   iree_vm_list_release(outputs);
   iree_hal_device_release(device);
   iree_vm_context_release(context);
   iree_vm_instance_release(instance);
-  fprintf(stdout, "[DEBUG] Run() completed successfully\n");
   return iree_ok_status();
 }
 
 int main() {
-  fprintf(stdout, "simple_embedding started\n");
+
+
+  fprintf(stdout, "vanilla_matmul test started\n");
   const iree_status_t result = Run();
   int ret = (int)iree_status_code(result);
   if (!iree_status_is_ok(result)) {
-    iree_status_fprint(stderr, result);
-    iree_status_free(result);
+   iree_status_fprint(stderr, result);
+   iree_status_free(result);
   }
-  fprintf(stdout, "simple_embedding done\n");
+  fprintf(stdout, "vanilla_matmul test done\n");
+
+
   return ret;
 }

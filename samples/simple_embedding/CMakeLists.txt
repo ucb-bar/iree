@@ -74,10 +74,7 @@ iree_cc_binary(
     "device_embedded_sync.c"
     "simple_embedding.c"
   DEPS
-    ::simple_embedding_test_bytecode_module_cpu_arm_64_c
-    ::simple_embedding_test_bytecode_module_cpu_riscv_32_c
     ::simple_embedding_test_bytecode_module_cpu_riscv_64_c
-    ::simple_embedding_test_bytecode_module_cpu_x86_64_c
     iree::base
     iree::hal
     iree::hal::drivers::local_sync::sync_driver
@@ -135,9 +132,12 @@ iree_bytecode_module(
   FLAGS
     "--iree-hal-target-device=local"
     "--iree-hal-local-target-device-backends=llvm-cpu"
-    "--iree-llvmcpu-target-triple=riscv64-pc-linux-elf"
+    "--iree-llvmcpu-target-triple=riscv64-unknown-elf"
+    #"--iree-llvmcpu-target-cpu-features=+m,+a,+f,+d,+c,+v,+zvl128b,+zvfh,+zvbb"
     "--iree-llvmcpu-target-cpu-features=+m,+a,+f,+d,+c"
     "--iree-llvmcpu-target-abi=lp64d"
+    #"--iree-llvmcpu-target-vector-width-in-bytes=16"
+    #"--riscv-v-fixed-length-vector-lmul-max=2"
     "--iree-llvmcpu-debug-symbols=false"
     "--iree-vm-bytecode-module-strip-source-map=true"
     "--iree-vm-emit-polyglot-zip=false"
