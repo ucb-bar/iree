@@ -62,6 +62,8 @@ iree_status_t Run() {
   IREE_RETURN_IF_ERROR(iree_vm_context_resolve_function(
       context, iree_make_cstring_view(kMainFunctionName), &main_function));
 
+      fprintf(stdout, "[  INFO ] Invoking function: %s\n", kMainFunctionName);
+
   // --- 1. PREPARE DATA ---
   // We need 8x8 = 64 elements for the full register utilization test.
   // A (Filled with 4.0f)
@@ -84,6 +86,8 @@ iree_status_t Run() {
   iree_hal_buffer_view_t* arg0_buffer_view = NULL;
   iree_hal_buffer_view_t* arg1_buffer_view = NULL;
   iree_hal_buffer_view_t* arg2_buffer_view = NULL; // New for input C
+
+  fprintf(stdout, "[  INFO ] Allocating input buffers on device...\n");
 
   // Allocate Input A
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
@@ -115,6 +119,8 @@ iree_status_t Run() {
       },
       iree_make_const_byte_span(kFloatZero, sizeof(kFloatZero)), &arg2_buffer_view));
 
+      fprintf(stdout, "[  INFO ] Input buffers allocated.\n");
+
   // --- 3. BUILD INPUT LIST ---
   iree_vm_list_t* inputs = NULL;
   IREE_RETURN_IF_ERROR(
@@ -138,18 +144,16 @@ iree_status_t Run() {
                           /*capacity=*/1, iree_allocator_system(), &outputs),
       "can't allocate output vm list");
   
-  // --- START TRACE ---
-  fprintf(stdout, "Starting Trace...\n");
-  l_trace_encoder_start(0);
+    fprintf(stdout, "[  INFO ] Input and output lists prepared.\n");
+  fprintf(stdout, "[  INFO ] Invoking the function...\n");
 
   // --- 4. INVOKE ---
   IREE_RETURN_IF_ERROR(iree_vm_invoke(
       context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
       /*policy=*/NULL, inputs, outputs, iree_allocator_system()));
 
-  // --- STOP TRACE ---
-  l_trace_encoder_stop(0);
-  fprintf(stdout, "Trace Stopped.\n");
+    fprintf(stdout, "[  INFO ] Function invocation completed.\n");
+
 
   // Get the result buffers from the invocation.
   iree_hal_buffer_view_t* ret_buffer_view =
