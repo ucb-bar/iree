@@ -20,6 +20,33 @@
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode/module.h"
 
+
+#define L_TRACE_ENCODER_BASE_ADDRESS 0x3000000
+
+typedef struct {
+  volatile uint32_t TR_TE_CTRL;        // 0x00
+  volatile uint32_t TR_TE_INFO;        // 0x04
+  volatile uint32_t TR_TE_BUBBLE[6];   // 0x08-0x1C
+  volatile uint32_t TR_TE_TARGET;      // 0x20
+  volatile uint32_t TR_TE_BRANCH_MODE; // 0x24
+} LTraceEncoderType;
+
+static inline void l_trace_encoder_start(uint32_t hart_id) {
+    // FIX: Cast base address to uintptr_t so it matches 64-bit pointer size
+    uintptr_t base_addr = (uintptr_t)L_TRACE_ENCODER_BASE_ADDRESS;
+    LTraceEncoderType *encoder = (LTraceEncoderType *)(base_addr + (hart_id * 0x1000));
+    
+    encoder->TR_TE_CTRL |= (0x1 << 1); 
+}
+
+static inline void l_trace_encoder_stop(uint32_t hart_id) {
+    // FIX: Cast base address to uintptr_t so it matches 64-bit pointer size
+    uintptr_t base_addr = (uintptr_t)L_TRACE_ENCODER_BASE_ADDRESS;
+    LTraceEncoderType *encoder = (LTraceEncoderType *)(base_addr + (hart_id * 0x1000));
+    
+    encoder->TR_TE_CTRL &= ~(0x1 << 1); 
+}
+
 // A function to create the HAL device from the different backend targets.
 // The HAL device is returned based on the implementation, and it must be
 // released by the caller.
@@ -155,6 +182,11 @@ iree_status_t Run() {
 }
 
 int main() {
+  // --- START TRACE ---
+  fprintf(stdout, "Starting Trace...\n");
+  l_trace_encoder_start(0);
+
+
   fprintf(stdout, "simple_embedding started\n");
   const iree_status_t result = Run();
   int ret = (int)iree_status_code(result);
@@ -163,5 +195,9 @@ int main() {
     iree_status_free(result);
   }
   fprintf(stdout, "simple_embedding done\n");
+
+  // --- STOP TRACE ---
+  l_trace_encoder_stop(0);
+  fprintf(stdout, "Trace Stopped.\n");
   return ret;
 }

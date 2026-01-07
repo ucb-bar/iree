@@ -14,6 +14,10 @@
 #include "iree/hal/local/executable_loader.h"
 #include "iree/hal/local/loaders/embedded_elf_loader.h"
 
+#ifdef IREE_SAMPLES_USE_STATIC_ELF_ALLOCATOR
+#include "samples/simple_embedding/static_elf_allocator.h"
+#endif  // IREE_SAMPLES_USE_STATIC_ELF_ALLOCATOR
+
 // Compiled module embedded here to avoid file IO:
 #if IREE_ARCH_ARM_32
 #include "samples/simple_embedding/simple_embedding_test_bytecode_module_cpu_arm_32_c.h"
@@ -33,9 +37,15 @@ iree_status_t create_sample_device(iree_allocator_t host_allocator,
   iree_hal_sync_device_params_t params;
   iree_hal_sync_device_params_initialize(&params);
 
+  // Use static ELF allocator if enabled, otherwise use the provided allocator.
+  iree_allocator_t elf_allocator = host_allocator;
+#ifdef IREE_SAMPLES_USE_STATIC_ELF_ALLOCATOR
+  elf_allocator = iree_samples_static_elf_allocator();
+#endif  // IREE_SAMPLES_USE_STATIC_ELF_ALLOCATOR
+
   iree_hal_executable_loader_t* loader = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_embedded_elf_loader_create(
-      /*plugin_manager=*/NULL, host_allocator, &loader));
+      /*plugin_manager=*/NULL, elf_allocator, &loader));
 
   iree_string_view_t identifier = iree_make_cstring_view("local-sync");
 

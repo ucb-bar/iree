@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "iree/base/api.h"
 #include "iree/hal/local/elf/arch.h"
@@ -168,40 +169,83 @@ iree_status_t iree_elf_arch_apply_relocations(
 // Cross-ABI function calls
 //==============================================================================
 
+// Helper function to print first 32 bytes of function code in hex
+static void print_function_bytes(const void* symbol_ptr) {
+  const uint8_t* bytes = (const uint8_t*)symbol_ptr;
+  fprintf(stdout, "  function bytes (first 32): ");
+  for (int i = 0; i < 32; i++) {
+    fprintf(stdout, "%02x ", bytes[i]);
+  }
+  fprintf(stdout, "\n");
+}
+
 void iree_elf_call_v_v(const void* symbol_ptr) {
   typedef void (*ptr_t)(void);
+  fprintf(stdout, "[DEBUG] iree_elf_call_v_v: calling function at %p\n", symbol_ptr);
+  print_function_bytes(symbol_ptr);
   ((ptr_t)symbol_ptr)();
 }
 
 void* iree_elf_call_p_i(const void* symbol_ptr, int a0) {
   typedef void* (*ptr_t)(int);
-  return ((ptr_t)symbol_ptr)(a0);
+  fprintf(stdout, "[DEBUG] iree_elf_call_p_i: calling function at %p (a0=%d)\n", 
+          symbol_ptr, a0);
+  print_function_bytes(symbol_ptr);
+  void* ret = ((ptr_t)symbol_ptr)(a0);
+  fprintf(stdout, "  return: %p\n", ret);
+  return ret;
 }
 
 void* iree_elf_call_p_ip(const void* symbol_ptr, int a0, void* a1) {
   typedef void* (*ptr_t)(int, void*);
-  return ((ptr_t)symbol_ptr)(a0, a1);
+  fprintf(stdout, "[DEBUG] iree_elf_call_p_ip: calling function at %p (a0=%d, a1=%p)\n", 
+          symbol_ptr, a0, a1);
+  print_function_bytes(symbol_ptr);
+  void* ret = ((ptr_t)symbol_ptr)(a0, a1);
+  fprintf(stdout, "  return: %p\n", ret);
+  return ret;
 }
 
 int iree_elf_call_i_p(const void* symbol_ptr, void* a0) {
   typedef int (*ptr_t)(void*);
-  return ((ptr_t)symbol_ptr)(a0);
+  fprintf(stdout, "[DEBUG] iree_elf_call_i_p: calling function at %p (a0=%p)\n", 
+          symbol_ptr, a0);
+  print_function_bytes(symbol_ptr);
+  int ret = ((ptr_t)symbol_ptr)(a0);
+  fprintf(stdout, "  return: %d (0x%x)\n", ret, ret);
+  return ret;
 }
 
 int iree_elf_call_i_ppp(const void* symbol_ptr, void* a0, void* a1, void* a2) {
   typedef int (*ptr_t)(void*, void*, void*);
-  return ((ptr_t)symbol_ptr)(a0, a1, a2);
+  // DEBUG: Print function address and arguments
+  fprintf(stdout, "[DEBUG] iree_elf_call_i_ppp: calling function at %p\n", symbol_ptr);
+  fprintf(stdout, "  args: a0=%p, a1=%p, a2=%p\n", a0, a1, a2);
+  print_function_bytes(symbol_ptr);
+  int ret = ((ptr_t)symbol_ptr)(a0, a1, a2);
+  fprintf(stdout, "  return: %d (0x%x)\n", ret, ret);
+  return ret;
 }
 
 void* iree_elf_call_p_ppp(const void* symbol_ptr, void* a0, void* a1,
                           void* a2) {
   typedef void* (*ptr_t)(void*, void*, void*);
-  return ((ptr_t)symbol_ptr)(a0, a1, a2);
+  fprintf(stdout, "[DEBUG] iree_elf_call_p_ppp: calling function at %p\n", symbol_ptr);
+  fprintf(stdout, "  args: a0=%p, a1=%p, a2=%p\n", a0, a1, a2);
+  print_function_bytes(symbol_ptr);
+  void* ret = ((ptr_t)symbol_ptr)(a0, a1, a2);
+  fprintf(stdout, "  return: %p\n", ret);
+  return ret;
 }
 
 int iree_elf_thunk_i_ppp(const void* symbol_ptr, void* a0, void* a1, void* a2) {
   typedef int (*ptr_t)(void*, void*, void*);
-  return ((ptr_t)symbol_ptr)(a0, a1, a2);
+  fprintf(stdout, "[DEBUG] iree_elf_thunk_i_ppp: calling function at %p\n", symbol_ptr);
+  fprintf(stdout, "  args: a0=%p, a1=%p, a2=%p\n", a0, a1, a2);
+  print_function_bytes(symbol_ptr);
+  int ret = ((ptr_t)symbol_ptr)(a0, a1, a2);
+  fprintf(stdout, "  return: %d (0x%x)\n", ret, ret);
+  return ret;
 }
 
 #endif  // IREE_ARCH_RISCV_*

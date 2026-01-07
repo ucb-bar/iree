@@ -7,6 +7,7 @@
 #include "iree/hal/local/elf/elf_module.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "iree/hal/local/elf/arch.h"
@@ -246,6 +247,13 @@ static iree_status_t iree_elf_module_load_segments(
       IREE_MEMORY_VIEW_FLAG_MAY_EXECUTE, module->vaddr_size,
       module->host_allocator, (void**)&module->vaddr_base));
   module->vaddr_bias = module->vaddr_base - vaddr_range.offset;
+  
+  // DEBUG: Print base address of the buffer in the section
+  fprintf(stdout, "[DEBUG] ELF loader: buffer base address = %p\n", 
+          (void*)module->vaddr_base);
+  fprintf(stdout, "[DEBUG] ELF loader: vaddr_bias = %p\n", 
+          (void*)module->vaddr_bias);
+  fflush(stdout);
 
   // Commit and load all of the segments.
   for (iree_elf_half_t i = 0; i < load_state->ehdr->e_phnum; ++i) {
@@ -271,8 +279,24 @@ static iree_status_t iree_elf_module_load_segments(
     // here because it keeps this all super simple (you know, as simple as an
     // entire custom ELF loader can be :).
     if (phdr->p_filesz > 0) {
-      memcpy(module->vaddr_bias + phdr->p_vaddr, raw_data.data + phdr->p_offset,
-             phdr->p_filesz);
+      void* dest_addr = (void*)(module->vaddr_bias + phdr->p_vaddr);
+      memcpy(dest_addr, raw_data.data + phdr->p_offset, phdr->p_filesz);
+      
+      // DEBUG: Print segment information, especially for executable segments
+      bool is_executable = (phdr->p_flags & IREE_ELF_PF_X) != 0;
+      fprintf(stdout, "[DEBUG] ELF loader: copied segment %d to %p (size=0x%" PRIxPTR ", vaddr=0x%" PRIxPTR ", %s)\n",
+              i, dest_addr, (uintptr_t)phdr->p_filesz, (uintptr_t)phdr->p_vaddr,
+              is_executable ? "EXECUTABLE" : "data");
+      fflush(stdout);
+      
+      // Print the starting address of the first executable segment (contains .text)
+      static bool first_executable_printed = false;
+      if (is_executable && !first_executable_printed) {
+        fprintf(stdout, "[DEBUG] ELF loader: first executable segment starts at %p\n",
+                dest_addr);
+        fflush(stdout);
+        first_executable_printed = true;
+      }
     }
 
     // NOTE: p_memsz may be larger than p_filesz - if so, the extra memory bytes

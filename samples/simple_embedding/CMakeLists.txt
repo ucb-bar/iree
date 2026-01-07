@@ -67,12 +67,30 @@ if(IREE_HAL_DRIVER_LOCAL_SYNC AND
     _IREE_COMPILER_TARGETING_RISCV_64 AND
     _IREE_COMPILER_TARGETING_X86_64) OR IREE_HOST_BIN_DIR))
 
+# Option to use static buffer allocator for ELF modules (useful for baremetal)
+# Default to ON for baremetal builds to enable deterministic addresses for stack unwinding
+option(IREE_SAMPLES_SIMPLE_EMBEDDING_STATIC_ELF_ALLOCATOR
+  "Use static buffer allocator for embedded ELF modules" ON)
+
+# Source files for the binary
+set(SIMPLE_EMBEDDING_EMBEDDED_SYNC_SRCS
+  "device_embedded_sync.c"
+  "simple_embedding.c"
+)
+
+# Conditionally add static allocator if enabled
+if(IREE_SAMPLES_SIMPLE_EMBEDDING_STATIC_ELF_ALLOCATOR)
+  list(APPEND SIMPLE_EMBEDDING_EMBEDDED_SYNC_SRCS
+    "static_elf_allocator.c"
+  )
+  add_compile_definitions(IREE_SAMPLES_USE_STATIC_ELF_ALLOCATOR=1)
+endif()
+
 iree_cc_binary(
   NAME
     simple_embedding_embedded_sync
   SRCS
-    "device_embedded_sync.c"
-    "simple_embedding.c"
+    ${SIMPLE_EMBEDDING_EMBEDDED_SYNC_SRCS}
   DEPS
     ::simple_embedding_test_bytecode_module_cpu_arm_64_c
     ::simple_embedding_test_bytecode_module_cpu_riscv_32_c
@@ -141,6 +159,7 @@ iree_bytecode_module(
     "--iree-llvmcpu-debug-symbols=false"
     "--iree-vm-bytecode-module-strip-source-map=true"
     "--iree-vm-emit-polyglot-zip=false"
+    "--iree-hal-dump-executable-files-to=./executable_files/"
   PUBLIC
 )
 
