@@ -430,27 +430,14 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
   Type out = elementTypes[2];
 
 
-  if (cpuName == "spacemit-k1") {
-    
-    // CASE: INT8 (Hardware IME Support)
-    // The vmadot instruction is fixed to:
-    // M=4 or 8 (supported by your UKernel loop)
-    // N=4 (fixed by register layout: 1 vector register = 4 cols of int32)
-    // K=8 (fixed by instruction definition)
-    if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) && out.isSignlessInteger(32)) {
-      return {
-          // Priority 1: 8x4x8 (Two stacked tiles, higher efficiency)
-          TileMxNxK{8, 4, 8}, 
+  if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) && out.isSignlessInteger(32)) {
+    return {
+        // Priority 1: 8x4x8 (Two stacked tiles, higher efficiency)
+        TileMxNxK{8, 4, 8}, 
 
-          // Priority 2: 4x4x8 (Single tile, for remainders)
-          TileMxNxK{4, 4, 8}, 
-      };
-    }
-
-    // For Spacemit-X60, if it's not Int8, we return empty to force a fallback
-    // to generic reference implementations or prevent tiling if unsupported.
-    // If you have FP32 support, add it here. Otherwise:
-    return {}; 
+        // Priority 2: 4x4x8 (Single tile, for remainders)
+        TileMxNxK{4, 4, 8}, 
+    };
   }
 
   if (lhs.isF32() && rhs.isF32() && out.isF32()) {

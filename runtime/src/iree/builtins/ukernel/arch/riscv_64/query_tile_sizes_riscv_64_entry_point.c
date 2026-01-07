@@ -41,11 +41,10 @@ static iree_uk_matmul_tile_sizes_t
 iree_uk_query_matmul_tile_sizes_riscv_64_s8s8s32(
     const iree_uk_query_tile_sizes_2d_params_t* params) {
 #if defined(IREE_UK_BUILD_RISCV_64_V)
-  // Check for Spacemit/IME capability (using the shared V flag strategy)
-  if (iree_uk_cpu_riscv_64_v(params->cpu_data)) {
-     // Return the EXACT shape of your IME instruction
-     return (iree_uk_matmul_tile_sizes_t){.M = 8, .K = 8, .N = 4};
-  }
+if (iree_uk_cpu_riscv_64_v(params->cpu_data)) {
+    // This correctly forces the compiler to tile for your kernel
+    return (iree_uk_matmul_tile_sizes_t){.M = 8, .K = 8, .N = 4};
+}
 #endif
   return (iree_uk_matmul_tile_sizes_t){.M = 8, .K = 1, .N = 8};
 }
