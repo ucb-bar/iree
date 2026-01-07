@@ -74,10 +74,7 @@ iree_cc_binary(
     "device_embedded_sync.c"
     "simple_embedding.c"
   DEPS
-    ::simple_embedding_test_bytecode_module_cpu_arm_64_c
-    ::simple_embedding_test_bytecode_module_cpu_riscv_32_c
     ::simple_embedding_test_bytecode_module_cpu_riscv_64_c
-    ::simple_embedding_test_bytecode_module_cpu_x86_64_c
     iree::base
     iree::hal
     iree::hal::drivers::local_sync::sync_driver
@@ -135,12 +132,20 @@ iree_bytecode_module(
   FLAGS
     "--iree-hal-target-device=local"
     "--iree-hal-local-target-device-backends=llvm-cpu"
-    "--iree-llvmcpu-target-triple=riscv64-pc-linux-elf"
-    "--iree-llvmcpu-target-cpu-features=+m,+a,+f,+d,+c"
+    "--iree-llvmcpu-target-triple=riscv64-unknown-elf"
+    "--iree-llvmcpu-target-cpu-features=+m,+a,+f,+d,+c,+v,+zvl256b,+zba,+zbb,+zbc,+zbs,+zicbom,+zicboz,+zicbop,+zihintpause" 
     "--iree-llvmcpu-target-abi=lp64d"
+    "--iree-llvmcpu-target-vector-width-in-bytes=32"
     "--iree-llvmcpu-debug-symbols=false"
     "--iree-vm-bytecode-module-strip-source-map=true"
     "--iree-vm-emit-polyglot-zip=false"
+    "--iree-opt-level=O3"
+    "--iree-opt-data-tiling"
+    "--iree-dispatch-creation-data-tiling"
+    #"--iree-llvmcpu-enable-ukernels=all"
+    #"--iree-llvmcpu-link-ukernel-bitcode=true"
+    "--iree-hal-dump-executable-files-to=${CMAKE_CURRENT_BINARY_DIR}/executable_files"
+    "--dump-compilation-phases-to=${CMAKE_CURRENT_BINARY_DIR}/compilation_phases"
   PUBLIC
 )
 
