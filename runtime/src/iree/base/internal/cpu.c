@@ -420,7 +420,7 @@ static void iree_cpu_initialize_from_platform_riscv_64(uint64_t* out_fields) {
   long rc = riscv_hwprobe(&kv_pairs[0], 1, 0, NULL, 0);
   if (rc != 0) {
     fprintf(stderr, "riscv_hwprobe syscall failed");
-    exit(1);
+    //exit(1);
   }
   unsigned long long hwprobe = kv_pairs[0].value;
   IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_V, hwprobe,
