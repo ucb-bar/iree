@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include <riscv_vector.h>
-
 #include "iree/builtins/ukernel/arch/riscv_64/common_riscv_64.h"
 #include "iree/builtins/ukernel/arch/riscv_64/mmt4d_riscv_64_internal.h"
 #include "bme.h"
@@ -207,7 +206,7 @@ iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v(
 // --- IME Instruction Macros ---
 // vmadot: Opcode 0x2b, Funct3 1 (SS), Funct7 0x38
 #define VMADOT_I8(vd, vs1, vs2) \
-    asm volatile(".insn r 0x2b, 1, 0x38, " vd ", " vs1 ", " vs2);
+    asm volatile(".insn r 0x2b, 3, 0x71, " vd ", " vs1 ", " vs2)
 
 IREE_UK_ATTRIBUTE_ALWAYS_INLINE static inline void
 iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl(
@@ -220,16 +219,14 @@ iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl(
   const iree_uk_int8_t* IREE_UK_RESTRICT lhs_ptr = lhs_panel;
   const iree_uk_int8_t* IREE_UK_RESTRICT rhs_ptr = rhs_panel;
 
-  const int K = params->K;
-
-  // DEBUG PRINT (Uncomment if needed)
-  // fprintf(stderr, "IME EXEC: M0=%d K=%d\n", M0, K);
 
   // =======================================================================
   // CASE 1: M0 = 4 (Single Tile)
   // =======================================================================
   if (M0 == 4) {
+    
     // 1. Initialize Accumulator (v8)
+    // Destination v8 is Even. OK.
     size_t vl_acc = 16;
     asm volatile("vsetvli zero, %0, e32, m2, ta, ma" : : "r"(vl_acc));
 
@@ -240,27 +237,36 @@ iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl(
     }
 
     // 2. Main Loop
-    // Hardware requires SEW=8, VL=32 for the 4x4x8 unit on VLEN=256
+    // Hardware requires SEW=8, VL=32 for the 4x4x8 unit
     size_t vl_in = 32;
-    for (int k = 0; k < K; k += 8) {
+    
+    
+    for (int k = 0; k < params->K; k++) {
       asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(vl_in));
 
-      // Load LHS (M0xK packed -> 4x8)
-      asm volatile("vle8.v v0, (%0)" : : "r"(&lhs_ptr[k * 4]));
-      // Load RHS (N0xK packed -> 4x8)
-      asm volatile("vle8.v v4, (%0)" : : "r"(&rhs_ptr[k * 4]));
+      // Load LHS (M0xK packed -> 4x8 = 32 bytes)
+      asm volatile("vle8.v v0, (%0)" : : "r"(lhs_ptr));
+      
+      // Load RHS (N0xK packed -> 4x8 = 32 bytes)
+      asm volatile("vle8.v v4, (%0)" : : "r"(rhs_ptr));
 
       VMADOT_I8("v8", "v0", "v4");
+      
+      // LHS Tile: 4 * 8 * 1 byte = 32 bytes
+      // RHS Tile: 4 * 8 * 1 byte = 32 bytes
+      lhs_ptr += 32;
+      rhs_ptr += 32;
     }
 
     // 3. Store Result
     asm volatile("vsetvli zero, %0, e32, m2, ta, ma" : : "r"(vl_acc));
     asm volatile("vse32.v v8, (%0)" : : "r"(out_ptr) : "memory");
-  } 
+  }
   // =======================================================================
   // CASE 2: M0 = 8 (Double Tile)
   // =======================================================================
   else if (M0 == 8) {
+    
     // 1. Init Accumulators (v8, v10)
     size_t vl_acc = 16;
     asm volatile("vsetvli zero, %0, e32, m2, ta, ma" : : "r"(vl_acc));
@@ -275,19 +281,27 @@ iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl(
 
     // 2. Loop
     size_t vl_in = 32;
-    for (int k = 0; k < K; k += 8) {
-        asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(vl_in));
-        
-        // Load LHS (Top v0, Bot v1)
-        asm volatile("vle8.v v0, (%0)" : : "r"(&lhs_ptr[k * 8]));
-        asm volatile("vle8.v v1, (%0)" : : "r"(&lhs_ptr[k * 8 + 32]));
-        
-        // Load RHS (Shared v4)
-        asm volatile("vle8.v v4, (%0)" : : "r"(&rhs_ptr[k * 4]));
-        
-        VMADOT_I8("v8", "v0", "v4");   // Top
-        VMADOT_I8("v10", "v1", "v4");  // Bottom
-    }
+    for (int k = 0; k < params->K; k++) { // Loop 16 times
+      asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(vl_in));
+      
+      // 1. Load LHS Block (64 bytes total)
+      // Top half (Rows 0-3): 32 bytes -> v0
+      asm volatile("vle8.v v0, (%0)" : : "r"(lhs_ptr));
+      // Bottom half (Rows 4-7): 32 bytes -> v2
+      asm volatile("vle8.v v2, (%0)" : : "r"(lhs_ptr + 32));
+      
+      // 2. Load RHS Block (32 bytes total)
+      // Rows 0-7: 32 bytes -> v4
+      asm volatile("vle8.v v4, (%0)" : : "r"(rhs_ptr));
+      
+      // 3. Compute
+      VMADOT_I8("v8", "v0", "v4");   // Top
+      VMADOT_I8("v10", "v2", "v4");  // Bottom
+      
+      // 4. Advance Pointers by Block Size
+      lhs_ptr += 64; 
+      rhs_ptr += 32;
+  }
 
     // 3. Store
     asm volatile("vsetvli zero, %0, e32, m2, ta, ma" : : "r"(vl_acc));
@@ -295,6 +309,7 @@ iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl(
     asm volatile("vse32.v v10, (%0)" : : "r"(&out_ptr[16]));
   }
 }
+
 
 // --- IME Registrations (Spacemit K1) ---
 
@@ -347,4 +362,4 @@ IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
 
 IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
   iree_uk_mmt4d_tile_s8s8s32_4x4x8_riscv_64_ime_impl,   
-  iree_uk_mmt4d_tile_s8s8s32_8xXXx8_riscv_64_ime, 8)  
+  iree_uk_mmt4d_tile_s8s8s32_8xXXx8_riscv_64_ime, 8)
