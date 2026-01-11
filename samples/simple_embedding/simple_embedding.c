@@ -14,6 +14,15 @@
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode/module.h"
 
+// --- RISC-V Hardware Timer ---
+// Since iree_time_now() is stubbed to 0 in your build, we use the 
+// hardware cycle counter directly.
+static inline uint64_t read_cycles() {
+    uint64_t cycles;
+    asm volatile("rdcycle %0" : "=r"(cycles));
+    return cycles;
+}
+
 extern iree_status_t create_sample_device(iree_allocator_t host_allocator,
                                           iree_hal_device_t** out_device);
 extern const iree_const_byte_span_t load_bytecode_module_data();
@@ -56,19 +65,15 @@ iree_status_t Run() {
       context, iree_make_cstring_view(kMainFunctionName), &main_function));
 
   // --- 1. PREPARE DATA ---
-  // Size: 128x128 = 16384 elements
   const int kDim = 128;
   const int kCount = kDim * kDim;
 
-  // LHS (Filled with 4)
   int8_t* kInt8_4 = (int8_t*)malloc(kCount * sizeof(int8_t));
   for (int i = 0; i < kCount; ++i) kInt8_4[i] = 4;
 
-  // RHS (Filled with 2)
   int8_t* kInt8_2 = (int8_t*)malloc(kCount * sizeof(int8_t));
   for (int i = 0; i < kCount; ++i) kInt8_2[i] = 2;
 
-  // ACC (Filled with 0)
   int32_t* kInt32_Zero = (int32_t*)malloc(kCount * sizeof(int32_t));
   for (int i = 0; i < kCount; ++i) kInt32_Zero[i] = 0;
 
@@ -79,7 +84,6 @@ iree_status_t Run() {
   iree_hal_buffer_view_t* arg1_buffer_view = NULL;
   iree_hal_buffer_view_t* arg2_buffer_view = NULL; 
 
-  // Allocate LHS (A)
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_SINT_8, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -89,7 +93,6 @@ iree_status_t Run() {
       },
       iree_make_const_byte_span(kInt8_4, kCount * sizeof(int8_t)), &arg0_buffer_view));
 
-  // Allocate RHS (B)
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_SINT_8, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -99,7 +102,6 @@ iree_status_t Run() {
       },
       iree_make_const_byte_span(kInt8_2, kCount * sizeof(int8_t)), &arg1_buffer_view));
 
-  // Allocate ACC (C)
   IREE_RETURN_IF_ERROR(iree_hal_buffer_view_allocate_buffer_copy(
       device, iree_hal_device_allocator(device), IREE_ARRAYSIZE(shape), shape,
       IREE_HAL_ELEMENT_TYPE_SINT_32, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
@@ -131,34 +133,65 @@ iree_status_t Run() {
                           /*capacity=*/1, iree_allocator_system(), &outputs),
       "can't allocate output vm list");
   
-  // --- 4. INVOKE ---
-  fprintf(stdout, "Invoking 128x128 Matmul...\n");
-  IREE_RETURN_IF_ERROR(iree_vm_invoke(
-      context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
-      /*policy=*/NULL, inputs, outputs, iree_allocator_system()));
-  fprintf(stdout, "Invocation Complete.\n");
+  // --- 4. BENCHMARK INVOKE ---
+  fprintf(stdout, "Starting Benchmark for 128x128 Matmul...\n");
 
-  // --- 5. VERIFY RESULTS ---
+  const int kWarmupIterations = 5;
+  const int kBenchmarkIterations = 20;
+
+  // A. Warmup Loop
+  for (int i = 0; i < kWarmupIterations; ++i) {
+    iree_vm_list_resize(outputs, 0); 
+    IREE_RETURN_IF_ERROR(iree_vm_invoke(
+        context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
+        /*policy=*/NULL, inputs, outputs, iree_allocator_system()));
+  }
+
+  // B. Timed Benchmark Loop (Using Cycles)
+  uint64_t start_cycles = read_cycles();
+  
+  for (int i = 0; i < kBenchmarkIterations; ++i) {
+    iree_vm_list_resize(outputs, 0); 
+    IREE_RETURN_IF_ERROR(iree_vm_invoke(
+        context, main_function, IREE_VM_INVOCATION_FLAG_NONE,
+        /*policy=*/NULL, inputs, outputs, iree_allocator_system()));
+  }
+
+  uint64_t end_cycles = read_cycles();
+
+  // --- 5. REPORT PERFORMANCE ---
+  uint64_t total_cycles = end_cycles - start_cycles;
+  double avg_cycles = (double)total_cycles / kBenchmarkIterations;
+  
+  double total_ops = 2.0 * (double)kDim * (double)kDim * (double)kDim;
+  // Ops/Cycle is a good metric when clock frequency isn't perfectly known
+  double ops_per_cycle = total_ops / avg_cycles; 
+
+  fprintf(stdout, "--------------------------------------------------\n");
+  fprintf(stdout, "Benchmark Complete.\n");
+  fprintf(stdout, "Iterations: %d\n", kBenchmarkIterations);
+  fprintf(stdout, "Total Cycles: %lu\n", total_cycles);
+  fprintf(stdout, "Avg Cycles  : %.2f\n", avg_cycles);
+  fprintf(stdout, "Efficiency  : %.4f Ops/Cycle\n", ops_per_cycle);
+  fprintf(stdout, "--------------------------------------------------\n");
+
+  // --- 6. VERIFY RESULTS ---
   iree_hal_buffer_view_t* ret_buffer_view =
       iree_vm_list_get_buffer_view_assign(outputs, 0);
   if (ret_buffer_view == NULL) {
     return iree_make_status(IREE_STATUS_NOT_FOUND, "can't find return buffer view");
   }
 
-  // Read back results
   int32_t* results = (int32_t*)malloc(kCount * sizeof(int32_t));
   IREE_RETURN_IF_ERROR(iree_hal_device_transfer_d2h(
       device, iree_hal_buffer_view_buffer(ret_buffer_view), 0, results,
       kCount * sizeof(int32_t), IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT,
       iree_infinite_timeout()));
 
-  // Verification Logic:
-  // Dot Product Length K = 128.
-  // Expected = 128 * (4 * 2) = 1024.
   int errors = 0;
   for (iree_host_size_t i = 0; i < kCount; ++i) {
     if (results[i] != 1024) {
-        if (errors < 10) { // Print only first 10 errors
+        if (errors < 10) { 
             fprintf(stderr, "Mismatch at %d: Expected 1024, got %d\n", (int)i, results[i]);
         }
         errors++;
@@ -170,7 +203,6 @@ iree_status_t Run() {
       return iree_make_status(IREE_STATUS_UNKNOWN, "result mismatches");
   }
 
-  // Cleanup
   free(kInt8_4);
   free(kInt8_2);
   free(kInt32_Zero);
