@@ -19,21 +19,20 @@ static inline uint64_t read_cycles() {
     return cycles;
 }
 
-// External declarations from device_embedded_sync.c
+// External declarations
 extern iree_status_t create_sample_device(iree_allocator_t host_allocator,
                                           iree_hal_device_t** out_device);
-extern const iree_const_byte_span_t load_bytecode_module_by_index(int index);
+extern const iree_const_byte_span_t load_bytecode_module_data();
 
-// Struct to hold benchmark results
-typedef struct {
-    int size;
-    int use_ukernel; // 1 = All, 0 = None
-    double avg_cycles;
-    double ops_per_cycle;
-} BenchResult;
+// --- Configuration Macros ---
+#ifndef MODEL_SIZE
+#define MODEL_SIZE 64
+#endif
+#ifndef UKERNEL_NAME
+#define UKERNEL_NAME "UNKNOWN"
+#endif
 
-// --- Run Single Model ---
-iree_status_t RunModel(int model_index, int size, int use_ukernel, BenchResult* out_result) {
+iree_status_t Run() {
   iree_vm_instance_t* instance = NULL;
   IREE_RETURN_IF_ERROR(iree_vm_instance_create(
       IREE_VM_TYPE_CAPACITY_DEFAULT, iree_allocator_system(), &instance));
@@ -48,11 +47,7 @@ iree_status_t RunModel(int model_index, int size, int use_ukernel, BenchResult* 
       IREE_HAL_MODULE_FLAG_SYNCHRONOUS, iree_hal_module_debug_sink_stdio(stderr),
       iree_allocator_system(), &hal_module));
 
-  const iree_const_byte_span_t module_data = load_bytecode_module_by_index(model_index);
-  if (module_data.data_length == 0) {
-      return iree_make_status(IREE_STATUS_NOT_FOUND, "Module data not found for index %d", model_index);
-  }
-
+  const iree_const_byte_span_t module_data = load_bytecode_module_data();
   iree_vm_module_t* bytecode_module = NULL;
   IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
       instance, module_data, iree_allocator_null(), iree_allocator_system(),
@@ -66,15 +61,18 @@ iree_status_t RunModel(int model_index, int size, int use_ukernel, BenchResult* 
   iree_vm_module_release(hal_module);
   iree_vm_module_release(bytecode_module);
 
-  // CHANGED: Function name is now always "module.main"
+  // Standard function name
   iree_vm_function_t main_function;
   IREE_RETURN_IF_ERROR(iree_vm_context_resolve_function(
       context, iree_make_cstring_view("module.main"), &main_function));
 
   // --- Prepare Data ---
+  const int size = MODEL_SIZE;
   const iree_host_size_t kCount = (iree_host_size_t)size * size;
   
-  // Data generation: A=4, B=2
+  fprintf(stdout, "Benchmarking: Size=%d, Ukernel=%s\n", size, UKERNEL_NAME);
+
+  // Allocate host memory
   int8_t* valA = (int8_t*)malloc(kCount * sizeof(int8_t));
   int8_t* valB = (int8_t*)malloc(kCount * sizeof(int8_t));
   memset(valA, 4, kCount * sizeof(int8_t));
@@ -98,33 +96,29 @@ iree_status_t RunModel(int model_index, int size, int use_ukernel, BenchResult* 
       IREE_HAL_ELEMENT_TYPE_SINT_8, IREE_HAL_ENCODING_TYPE_DENSE_ROW_MAJOR,
       params, iree_make_const_byte_span(valB, kCount), &bv1));
 
-  // CHANGED: Only 2 inputs now
+  // FREE HOST MEMORY ASAP
+  free(valA);
+  free(valB);
+
   iree_vm_list_t* inputs = NULL;
   IREE_RETURN_IF_ERROR(iree_vm_list_create(iree_vm_make_undefined_type_def(), 2, iree_allocator_system(), &inputs));
   
   iree_vm_ref_t ref0 = iree_hal_buffer_view_move_ref(bv0);
   iree_vm_ref_t ref1 = iree_hal_buffer_view_move_ref(bv1);
-  
   iree_vm_list_push_ref_move(inputs, &ref0);
   iree_vm_list_push_ref_move(inputs, &ref1);
 
   iree_vm_list_t* outputs = NULL;
   IREE_RETURN_IF_ERROR(iree_vm_list_create(iree_vm_make_undefined_type_def(), 1, iree_allocator_system(), &outputs));
 
-  // --- Benchmark ---
-  printf("Running: Size=%d, Ukernel=%s\n", size, use_ukernel ? "ALL" : "NONE");
-  
+  // --- Benchmark Loop ---
   const int kWarmup = 2;
   const int kIters = 10;
-
-  printf("  Warming up...\n");
 
   for(int i=0; i<kWarmup; ++i) {
       iree_vm_list_resize(outputs, 0);
       IREE_RETURN_IF_ERROR(iree_vm_invoke(context, main_function, IREE_VM_INVOCATION_FLAG_NONE, NULL, inputs, outputs, iree_allocator_system()));
   }
-
-  printf("  Running benchmark (%d iterations)...\n", kIters);
 
   uint64_t start = read_cycles();
   for(int i=0; i<kIters; ++i) {
@@ -133,18 +127,31 @@ iree_status_t RunModel(int model_index, int size, int use_ukernel, BenchResult* 
   }
   uint64_t end = read_cycles();
 
-  double avg = (double)(end - start) / kIters;
-  double total_ops = 2.0 * (double)size * (double)size * (double)size;
-  double efficiency = total_ops / avg;
+  // --- SAFE INTEGER MATH ---
+  uint64_t total_cycles = end - start;
+  uint64_t avg_cycles_int = total_cycles / kIters;
 
-    printf("  Average Cycles: %.2f\n", avg);
+  // Calculate Total Ops = 2 * N^3
+  // Use uint64_t to prevent overflow for large N
+  uint64_t n = (uint64_t)size;
+  uint64_t total_ops = 2 * n * n * n;
 
-  out_result->size = size;
-  out_result->use_ukernel = use_ukernel;
-  out_result->avg_cycles = avg;
-  out_result->ops_per_cycle = efficiency;
+  // Calculate Efficiency (Ops/Cycle) with 2 decimal places manually
+  // Formula: (Ops * 100) / Cycles
+  // This gives us "Efficiency x 100"
+  uint64_t efficiency_x100 = 0;
+  if (avg_cycles_int > 0) {
+      efficiency_x100 = (total_ops * 100) / avg_cycles_int;
+  }
+  
+  uint64_t eff_whole = efficiency_x100 / 100;
+  uint64_t eff_frac  = efficiency_x100 % 100;
 
-  // --- Verify ---
+  // CSV Output using only integer formatting (%lu)
+  fprintf(stdout, "CSV, %d, %s, %lu, %lu.%02lu\n", 
+          size, UKERNEL_NAME, avg_cycles_int, eff_whole, eff_frac);
+
+  // --- Verification ---
   iree_hal_buffer_view_t* ret_bv = iree_vm_list_get_buffer_view_assign(outputs, 0);
   int32_t* res_data = (int32_t*)malloc(kCount * sizeof(int32_t));
   IREE_RETURN_IF_ERROR(iree_hal_device_transfer_d2h(device, iree_hal_buffer_view_buffer(ret_bv), 0, res_data, kCount*4, IREE_HAL_TRANSFER_BUFFER_FLAG_DEFAULT, iree_infinite_timeout()));
@@ -153,59 +160,28 @@ iree_status_t RunModel(int model_index, int size, int use_ukernel, BenchResult* 
   int errs = 0;
   for(int i=0; i<kCount; i+=101) { 
       if(res_data[i] != expected) {
-          if(errs < 1) printf("  Error: Expected %d, got %d at index %d\n", expected, res_data[i], i);
+          if(errs < 1) fprintf(stderr, "Mismatch: Expected %d, got %d\n", expected, res_data[i]);
           errs++;
       }
   }
-  if(errs > 0) printf("  Verification FAILED.\n");
-  else printf("  Verification Passed.\n");
 
-  free(valA); free(valB); free(res_data);
+  free(res_data);
   iree_vm_list_release(inputs);
   iree_vm_list_release(outputs);
   iree_hal_device_release(device);
   iree_vm_context_release(context);
   iree_vm_instance_release(instance);
 
+  if (errs > 0) return iree_make_status(IREE_STATUS_UNKNOWN, "Verification Failed");
   return iree_ok_status();
 }
 
 int main() {
-    const int kNumConfigs = 12;
-    BenchResult results[12];
-
-    int sizes[] = {64, 64, 128, 128, 256, 256, 512, 512, 1024, 1024, 2048, 2048};
-    int uks[]   = {0,  1,  1,   0,   1,   0,   1,   0,   1,    0,    1,    0};
-
-    printf("=== Starting Multi-Model Benchmark (Up to 2048) ===\n");
-
-    for(int i=0; i<kNumConfigs; ++i) {
-        iree_status_t status = RunModel(i, sizes[i], uks[i], &results[i]);
-        if(!iree_status_is_ok(status)) {
-            iree_status_fprint(stderr, status);
-            iree_status_free(status);
-            return 1;
-        }
-    }
-
-    printf("\n=======================================================================\n");
-    printf("BENCHMARK REPORT (RISC-V 64)\n");
-    printf("=======================================================================\n");
-    printf("| Size      | Ukernel | Avg Cycles         | Ops/Cycle | Speedup vs None |\n");
-    printf("|-----------|---------|--------------------|-----------|-----------------|\n");
-
-    for (int i = 0; i < kNumConfigs; i += 2) {
-        BenchResult rAll = results[i];
-        BenchResult rNone = results[i+1];
-        
-        double speedup = rNone.avg_cycles / rAll.avg_cycles;
-
-        printf("| %4d x%4d | ALL     | %18.2f | %9.2f | %13.2fx |\n", 
-               rAll.size, rAll.size, rAll.avg_cycles, rAll.ops_per_cycle, speedup);
-        printf("| %4d x%4d | NONE    | %18.2f | %9.2f |             1.0 |\n", 
-               rNone.size, rNone.size, rNone.avg_cycles, rNone.ops_per_cycle);
-        printf("|-----------|---------|--------------------|-----------|-----------------|\n");
-    }
-
-    return 0;
+  const iree_status_t result = Run();
+  if (!iree_status_is_ok(result)) {
+    iree_status_fprint(stderr, result);
+    iree_status_free(result);
+    return 1;
+  }
+  return 0;
 }

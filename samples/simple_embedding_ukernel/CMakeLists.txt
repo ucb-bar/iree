@@ -2,7 +2,8 @@
 
 iree_add_all_subdirs()
 
-# --- 1. Define Base Flags (Common) ---
+# --- 1. Define Flags ---
+
 set(BASE_RISCV_FLAGS
   "--iree-hal-target-device=local"
   "--iree-hal-local-target-device-backends=llvm-cpu"
@@ -14,157 +15,97 @@ set(BASE_RISCV_FLAGS
   "--iree-vm-bytecode-module-strip-source-map=true"
   "--iree-vm-emit-polyglot-zip=false"
   "--iree-opt-level=O3"
-  "--iree-llvmcpu-link-ukernel-bitcode=true"
 )
 
-# --- 2. Define Specific Flag Sets ---
-
-# FLAGS FOR UKERNEL=ALL (Enable Data Tiling)
-# Microkernels are designed for data tiling (mmt4d), so we keep it enabled here.
+# UKERNEL=ALL (Tiling Enabled)
 set(FLAGS_UK_ALL
   ${BASE_RISCV_FLAGS}
+  "--iree-llvmcpu-link-ukernel-bitcode=true"
+  "--iree-llvmcpu-enable-ukernels=all"
   "--iree-opt-data-tiling"
   "--iree-dispatch-creation-data-tiling"
-  "--iree-llvmcpu-enable-ukernels=all"
 )
 
-# FLAGS FOR UKERNEL=NONE (Disable Data Tiling)
-# We DISABLE data tiling here to prevent the compiler from generating 
-# heavy stack-allocating packing code that crashes bare metal.
+# UKERNEL=NONE (Tiling Disabled)
 set(FLAGS_UK_NONE
   ${BASE_RISCV_FLAGS}
+  "--iree-llvmcpu-link-ukernel-bitcode=false"
   "--iree-llvmcpu-enable-ukernels=none"
+  "--iree-opt-data-tiling=false"
+  "--iree-dispatch-creation-data-tiling=false"
 )
 
-# --- 3. Generate Modules ---
+# List to collect all binary target names
+set(ALL_BENCHMARKS "")
 
-# Size 64
-iree_bytecode_module(
-  NAME mm_64_uk_all
-  SRC "mm_64.mlir"
-  C_IDENTIFIER "iree_samples_mm_64_uk_all"
-  FLAGS ${FLAGS_UK_ALL}
-  PUBLIC
-)
-iree_bytecode_module(
-  NAME mm_64_uk_none
-  SRC "mm_64.mlir"
-  C_IDENTIFIER "iree_samples_mm_64_uk_none"
-  FLAGS ${FLAGS_UK_NONE}
-  PUBLIC
-)
+# --- 2. Generator Function ---
 
-# Size 128
-iree_bytecode_module(
-  NAME mm_128_uk_all
-  SRC "mm_128.mlir"
-  C_IDENTIFIER "iree_samples_mm_128_uk_all"
-  FLAGS ${FLAGS_UK_ALL}
-  PUBLIC
-)
-iree_bytecode_module(
-  NAME mm_128_uk_none
-  SRC "mm_128.mlir"
-  C_IDENTIFIER "iree_samples_mm_128_uk_none"
-  FLAGS ${FLAGS_UK_NONE}
-  PUBLIC
-)
+function(create_benchmark SIZE UKERNEL_ENABLED)
+  if(UKERNEL_ENABLED)
+    set(UK_TAG "uk_all")
+    set(MLIR_FLAGS ${FLAGS_UK_ALL})
+    set(UK_PRINT_NAME "ALL")
+  else()
+    set(UK_TAG "uk_none")
+    set(MLIR_FLAGS ${FLAGS_UK_NONE})
+    set(UK_PRINT_NAME "NONE")
+  endif()
 
-# Size 256
-iree_bytecode_module(
-  NAME mm_256_uk_all
-  SRC "mm_256.mlir"
-  C_IDENTIFIER "iree_samples_mm_256_uk_all"
-  FLAGS ${FLAGS_UK_ALL}
-  PUBLIC
-)
-iree_bytecode_module(
-  NAME mm_256_uk_none
-  SRC "mm_256.mlir"
-  C_IDENTIFIER "iree_samples_mm_256_uk_none"
-  FLAGS ${FLAGS_UK_NONE}
-  PUBLIC
-)
+  set(MODULE_NAME "mm_${SIZE}_${UK_TAG}")
+  set(BINARY_NAME "bench_${MODULE_NAME}")
+  
+  # A. Generate Bytecode Module
+  iree_bytecode_module(
+    NAME ${MODULE_NAME}
+    SRC "mm_${SIZE}.mlir"
+    C_IDENTIFIER "iree_samples_${MODULE_NAME}"
+    FLAGS ${MLIR_FLAGS}
+    PUBLIC
+  )
 
-# Size 512
-iree_bytecode_module(
-  NAME mm_512_uk_all
-  SRC "mm_512.mlir"
-  C_IDENTIFIER "iree_samples_mm_512_uk_all"
-  FLAGS ${FLAGS_UK_ALL}
-  PUBLIC
-)
-iree_bytecode_module(
-  NAME mm_512_uk_none
-  SRC "mm_512.mlir"
-  C_IDENTIFIER "iree_samples_mm_512_uk_none"
-  FLAGS ${FLAGS_UK_NONE}
-  PUBLIC
-)
+  # B. Create Independent Binary
+  iree_cc_binary(
+    NAME ${BINARY_NAME}
+    SRCS
+      "device_embedded_sync.c"
+      "simple_embedding.c"
+    DEPS
+      ::${MODULE_NAME}_c
+      iree::base
+      iree::hal
+      iree::hal::drivers::local_sync::sync_driver
+      iree::hal::local
+      iree::hal::local::loaders::embedded_elf_loader
+      iree::modules::hal
+      iree::vm
+      iree::vm::bytecode::module
+    DEFINES
+      "MODEL_SIZE=${SIZE}"
+      "UKERNEL_NAME=\"${UK_PRINT_NAME}\""
+      "MODULE_CREATE_FN=iree_samples_${MODULE_NAME}_create"
+      "MODULE_HEADER=\"samples/simple_embedding_ukernel/${MODULE_NAME}_c.h\""
+  )
 
-# Size 1024
-iree_bytecode_module(
-  NAME mm_1024_uk_all
-  SRC "mm_1024.mlir"
-  C_IDENTIFIER "iree_samples_mm_1024_uk_all"
-  FLAGS ${FLAGS_UK_ALL}
-  PUBLIC
-)
-iree_bytecode_module(
-  NAME mm_1024_uk_none
-  SRC "mm_1024.mlir"
-  C_IDENTIFIER "iree_samples_mm_1024_uk_none"
-  FLAGS ${FLAGS_UK_NONE}
-  PUBLIC
-)
+  # Update the list of benchmarks (PARENT_SCOPE is needed to export variable from function)
+  set(ALL_BENCHMARKS ${ALL_BENCHMARKS} ${BINARY_NAME} PARENT_SCOPE)
 
-# Size 2048
-iree_bytecode_module(
-  NAME mm_2048_uk_all
-  SRC "mm_2048.mlir"
-  C_IDENTIFIER "iree_samples_mm_2048_uk_all"
-  FLAGS ${FLAGS_UK_ALL}
-  PUBLIC
-)
-iree_bytecode_module(
-  NAME mm_2048_uk_none
-  SRC "mm_2048.mlir"
-  C_IDENTIFIER "iree_samples_mm_2048_uk_none"
-  FLAGS ${FLAGS_UK_NONE}
-  PUBLIC
-)
+endfunction()
 
-# --- 4. Main Binary ---
-iree_cc_binary(
-  NAME
-    benchmark_suite
-  SRCS
-    "device_embedded_sync.c"
-    "simple_embedding.c"
-  DEPS
-    ::mm_64_uk_all_c
-    ::mm_64_uk_none_c
-    ::mm_128_uk_all_c
-    ::mm_128_uk_none_c
-    ::mm_256_uk_all_c
-    ::mm_256_uk_none_c
-    ::mm_512_uk_all_c
-    ::mm_512_uk_none_c
-    ::mm_1024_uk_all_c
-    ::mm_1024_uk_none_c
-    ::mm_2048_uk_all_c
-    ::mm_2048_uk_none_c
-    iree::base
-    iree::hal
-    iree::hal::drivers::local_sync::sync_driver
-    iree::hal::local
-    iree::hal::local::loaders::embedded_elf_loader
-    iree::modules::hal
-    iree::vm
-    iree::vm::bytecode::module
-)
+# --- 3. Instantiate All Benchmarks ---
 
-iree_native_test(
-  NAME "benchmark_suite_test"
-  SRC ::benchmark_suite
-)
+create_benchmark(64   1) # All
+create_benchmark(64   0) # None
+create_benchmark(128  1)
+create_benchmark(128  0)
+create_benchmark(256  1)
+create_benchmark(256  0)
+create_benchmark(512  1)
+create_benchmark(512  0)
+create_benchmark(1024 1)
+create_benchmark(1024 0)
+create_benchmark(2048 1)
+create_benchmark(2048 0)
+
+# --- 4. Create Meta-Target ---
+# This restores the 'benchmark_suite' target so your build script works.
+add_custom_target(benchmark_suite DEPENDS ${ALL_BENCHMARKS})

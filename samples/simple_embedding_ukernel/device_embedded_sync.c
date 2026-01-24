@@ -10,21 +10,9 @@
 #include "iree/hal/local/executable_loader.h"
 #include "iree/hal/local/loaders/embedded_elf_loader.h"
 
-// --- Include Generated Headers ---
-#if defined(IREE_ARCH_RISCV_64)
-  #include "samples/simple_embedding_ukernel/mm_64_uk_all_c.h"
-  #include "samples/simple_embedding_ukernel/mm_64_uk_none_c.h"
-  #include "samples/simple_embedding_ukernel/mm_128_uk_all_c.h"
-  #include "samples/simple_embedding_ukernel/mm_128_uk_none_c.h"
-  #include "samples/simple_embedding_ukernel/mm_256_uk_all_c.h"
-  #include "samples/simple_embedding_ukernel/mm_256_uk_none_c.h"
-  #include "samples/simple_embedding_ukernel/mm_512_uk_all_c.h"
-  #include "samples/simple_embedding_ukernel/mm_512_uk_none_c.h"
-  #include "samples/simple_embedding_ukernel/mm_1024_uk_all_c.h"
-  #include "samples/simple_embedding_ukernel/mm_1024_uk_none_c.h"
-  #include "samples/simple_embedding_ukernel/mm_2048_uk_all_c.h"
-  #include "samples/simple_embedding_ukernel/mm_2048_uk_none_c.h"
-#endif
+// --- Dynamic Include ---
+// CMake passes -DMODULE_HEADER="path/to/header.h"
+#include MODULE_HEADER
 
 iree_status_t create_sample_device(iree_allocator_t host_allocator,
                                    iree_hal_device_t** out_device) {
@@ -51,31 +39,9 @@ iree_status_t create_sample_device(iree_allocator_t host_allocator,
   return status;
 }
 
-// Helper to Load Specific Module Data
-const iree_const_byte_span_t load_bytecode_module_by_index(int index) {
-  const struct iree_file_toc_t* toc = NULL;
-
-#if defined(IREE_ARCH_RISCV_64)
-  switch (index) {
-    case 0: toc = iree_samples_mm_64_uk_all_create(); break;
-    case 1: toc = iree_samples_mm_64_uk_none_create(); break;
-    case 2: toc = iree_samples_mm_128_uk_all_create(); break;
-    case 3: toc = iree_samples_mm_128_uk_none_create(); break;
-    case 4: toc = iree_samples_mm_256_uk_all_create(); break;
-    case 5: toc = iree_samples_mm_256_uk_none_create(); break;
-    case 6: toc = iree_samples_mm_512_uk_all_create(); break;
-    case 7: toc = iree_samples_mm_512_uk_none_create(); break;
-    case 8: toc = iree_samples_mm_1024_uk_all_create(); break;
-    case 9: toc = iree_samples_mm_1024_uk_none_create(); break;
-    case 10: toc = iree_samples_mm_2048_uk_all_create(); break;
-    case 11: toc = iree_samples_mm_2048_uk_none_create(); break;
-    default: return iree_make_const_byte_span(NULL, 0);
-  }
-#endif
-
-  if (toc) {
-    return iree_make_const_byte_span(toc->data, toc->size);
-  } else {
-    return iree_make_const_byte_span(NULL, 0);
-  }
+// Helper to Load the Single Module for this Binary
+const iree_const_byte_span_t load_bytecode_module_data() {
+  // CMake passes -DMODULE_CREATE_FN=iree_samples_mm_..._create
+  const struct iree_file_toc_t* toc = MODULE_CREATE_FN();
+  return iree_make_const_byte_span(toc->data, toc->size);
 }
