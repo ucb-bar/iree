@@ -31,6 +31,9 @@ std::string getEnableDecompositionStr();
 StringAttr getEnableLoopPeelingAttrName(MLIRContext *ctx);
 std::string getEnableLoopPeelingStr();
 
+StringAttr getEnableGemminiLinalgLoweringAttrName(MLIRContext *ctx);
+std::string getEnableGemminiLinalgLoweringStr();
+
 /// Returns true if the UnitAttr of the `label` is enabled for the input
 /// function. This is is infered from the config dictionary. attribute that's
 /// part of to the translation info corresponding to this funciton.

@@ -14,20 +14,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/IR/Dialect.h"
-#include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Verifier.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/Parser/Parser.h"
-#include "mlir/Support/FileUtilities.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
+#include "mlir/Parser/Parser.h"
+#include "mlir/Support/FileUtilities.h"
 
 #include "Gemmini/GemminiDialect.h"
 
@@ -41,21 +41,21 @@ static llvm::cl::opt<std::string>
 
 int main(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
-  
+
   // Parse command line arguments
-  llvm::cl::ParseCommandLineOptions(argc, argv, 
-      "Gemmini dialect test - verifies dialect loads correctly\n");
+  llvm::cl::ParseCommandLineOptions(
+      argc, argv, "Gemmini dialect test - verifies dialect loads correctly\n");
 
   mlir::MLIRContext context;
-  
+
   // Register the Gemmini dialect
   context.getOrLoadDialect<buddy::gemmini::GemminiDialect>();
-  
+
   // Also register commonly needed dialects
   context.loadDialect<mlir::func::FuncDialect>();
   context.loadDialect<mlir::arith::ArithDialect>();
   context.loadDialect<mlir::memref::MemRefDialect>();
-  
+
   // Parse input file
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileOrErr =
       llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
@@ -90,6 +90,7 @@ int main(int argc, char **argv) {
   module->print(output->os());
   output->keep();
 
-  llvm::outs() << "Successfully loaded and processed module with Gemmini dialect!\n";
+  llvm::outs()
+      << "Successfully loaded and processed module with Gemmini dialect!\n";
   return 0;
 }

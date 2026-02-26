@@ -14,12 +14,12 @@ Successfully integrated buddy_gemmini into IREE with minimal, correct, buildable
 
 #### 1. CMake Include Path Issues
 - **Problem**: "prefixed in the source directory" errors
-- **Solution**: 
+- **Solution**:
   - Changed from PUBLIC to PRIVATE include directories in target configurations
   - Used proper BUILD_INTERFACE generator expressions
   - Added CMAKE_CURRENT_BINARY_DIR for generated headers
 
-#### 2. MLIR API Changes  
+#### 2. MLIR API Changes
 - **Problem**: `replaceOpWithNewOp` no longer works with ops lacking `create` method
 - **Solution**: Rewrote all patterns to use:
   ```cpp
@@ -33,7 +33,7 @@ Successfully integrated buddy_gemmini into IREE with minimal, correct, buildable
 
 #### 3. LLVMProcessSources.cmake Error
 - **Problem**: "Found erroneous configuration for source file LegalizeForLLVMExport.cpp"
-- **Solution**: 
+- **Solution**:
   - Added `PARTIAL_SOURCES_INTENDED` to CMakeLists.txt
   - Created CMake option `IREE_ENABLE_BUDDY_GEMMINI_LEGALIZE` (default OFF)
   - Added stub implementations when legalization is disabled

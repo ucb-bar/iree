@@ -17,6 +17,7 @@
 #include "RegisterGemmini.h"
 #include "Gemmini/GemminiDialect.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/Pass/PassManager.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -30,6 +31,14 @@ void registerGemminiPasses() {
   mlir::buddy::registerLowerLinalgToGemminiPass();
   mlir::buddy::registerLowerGemminiPass();
   mlir::buddy::registerGemminiIRDumpsPass();
+
+  static PassPipelineRegistration<> gemminiTestPassPipeline(
+      "iree-gemmini-test-pipeline",
+      "Runs one-shot bufferization and lowers linalg to Gemmini",
+      [](OpPassManager &passManager) {
+        (void)parsePassPipeline("one-shot-bufferize,convert-linalg-to-gemmini",
+                                passManager);
+      });
 }
 
 } // namespace iree_compiler

@@ -31,11 +31,11 @@ void configureGemminiLegalizeForExportTarget(LLVMConversionTarget &target) {
   // TODO: Implement when IREE_ENABLE_BUDDY_GEMMINI_LEGALIZE is enabled
 }
 
-// Stub implementation - to be replaced when LegalizeForLLVMExport.cpp is fixed  
+// Stub implementation - to be replaced when LegalizeForLLVMExport.cpp is fixed
 void populateGemminiLegalizeForLLVMExportPatterns(
-    LLVMTypeConverter &converter, RewritePatternSet &patterns, 
-    int64_t dim, int64_t addrLen, int64_t accRows, int64_t bankRows,
-    size_t sizeOfElemT, size_t sizeOfAccT) {
+    LLVMTypeConverter &converter, RewritePatternSet &patterns, int64_t dim,
+    int64_t addrLen, int64_t accRows, int64_t bankRows, size_t sizeOfElemT,
+    size_t sizeOfAccT) {
   // TODO: Implement when IREE_ENABLE_BUDDY_GEMMINI_LEGALIZE is enabled
 }
 

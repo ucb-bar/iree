@@ -82,6 +82,7 @@ struct LLVMCPUPipelineOptions {
   bool enableAArch64SME = false;
   bool enableAArch64I8mm = false;
   bool lowerToAVX2 = false;
+  bool enableGemminiLinalgLowering = false;
 };
 
 /// Populates the passes to lower linalg ops on buffers. Currenly this

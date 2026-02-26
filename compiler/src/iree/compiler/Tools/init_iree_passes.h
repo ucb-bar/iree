@@ -70,7 +70,7 @@ inline void registerAllIreePasses() {
   IREE::VM::registerVMAnalysisTestPasses();
   IREE::VMVX::registerVMVXPasses();
   registerIREEVMTransformPassPipeline();
-  
+
   // Register Gemmini passes.
   registerGemminiPasses();
 

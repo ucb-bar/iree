@@ -35,6 +35,8 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 #include "Gemmini/GemminiDialect.h"
 #include "Gemmini/GemminiOps.h"
@@ -42,6 +44,128 @@
 
 using namespace mlir;
 using namespace buddy;
+
+namespace {
+
+template <typename OpTy>
+void lowerGemminiIntrinsicOpToLLVMCall(ModuleOp module, StringRef intrinsic) {
+  SmallVector<OpTy> ops;
+  module.walk([&](OpTy op) { ops.push_back(op); });
+  for (OpTy op : ops) {
+  OpBuilder builder(op);
+    auto call = builder.create<LLVM::CallIntrinsicOp>(
+      op.getLoc(), builder.getStringAttr(intrinsic), op->getOperands());
+  if (op->getNumResults() == 0) {
+      op.erase();
+  } else {
+      op->replaceAllUsesWith(call->getResults());
+      op.erase();
+  }
+  }
+}
+
+void lowerGemminiIntrinsicsToLLVMCalls(ModuleOp module) {
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::Flush_IntrOp>(
+    module, "llvm.riscv.flush");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::ConfigSt_IntrOp>(
+    module, "llvm.riscv.config.st");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::ConifgLd_IntrOp>(
+    module, "llvm.riscv.config.ld");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::ConfigEX_IntrOp>(
+    module, "llvm.riscv.config.ex");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::ConfigNorm_IntrOp>(
+    module, "llvm.riscv.config.norm");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::Mvin_IntrOp>(module,
+                              "llvm.riscv.mvin");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::Mvin2_IntrOp>(
+    module, "llvm.riscv.mvin2");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::Mvin3_IntrOp>(
+    module, "llvm.riscv.mvin3");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::Mvout_IntrOp>(
+    module, "llvm.riscv.mvout");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::Preload_IntrOp>(
+    module, "llvm.riscv.preload");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::ComputePreloaded_IntrOp>(
+    module, "llvm.riscv.compute.preloaded");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::ComputeAccumulated_IntrOp>(
+    module, "llvm.riscv.compute.accumulated");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopWsConfigBounds_IntrOp>(
+    module, "llvm.riscv.loop.ws.config.bounds");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopWsConfigAddrsAB_IntrOp>(
+    module, "llvm.riscv.loop.ws.config.addrs.ab");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopWsConfigAddrsDC_IntrOp>(
+    module, "llvm.riscv.loop.ws.config.addrs.dc");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopWsConfigStridesAB_IntrOp>(
+    module, "llvm.riscv.loop.ws.config.strides.ab");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopWsConfigStridesDC_IntrOp>(
+    module, "llvm.riscv.loop.ws.config.strides.dc");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopWs_IntrOp>(module,
+                               "llvm.riscv.loop.ws");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWsConfig1_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws.config1");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWsConfig2_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws.config2");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWsConfig3_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws.config3");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWsConfig4_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws.config4");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWsConfig5_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws.config5");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWsConfig6_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws.config6");
+  lowerGemminiIntrinsicOpToLLVMCall<gemmini::LoopConvWs_IntrOp>(
+    module, "llvm.riscv.loop.conv.ws");
+}
+
+LogicalResult runStubLowering(ModuleOp module) {
+  auto ensureDeclaration = [&](StringRef calleeName,
+                 ArrayRef<Type> inputTypes) {
+  if (module.lookupSymbol<func::FuncOp>(calleeName)) {
+    return;
+  }
+  OpBuilder builder(module.getBodyRegion());
+  builder.setInsertionPointToStart(module.getBody());
+  auto funcType = builder.getFunctionType(inputTypes, TypeRange{});
+  auto callee =
+    builder.create<func::FuncOp>(module.getLoc(), calleeName, funcType);
+  callee.setPrivate();
+  };
+
+  SmallVector<gemmini::TileMatMulOp> matmuls;
+  module.walk([&](gemmini::TileMatMulOp op) { matmuls.push_back(op); });
+  for (gemmini::TileMatMulOp op : matmuls) {
+  SmallVector<Type> inputTypes;
+  inputTypes.reserve(op->getNumOperands());
+  for (Value operand : op->getOperands()) {
+    inputTypes.push_back(operand.getType());
+  }
+  constexpr StringLiteral callee = "__iree_gemmini_tile_matmul";
+  ensureDeclaration(callee, inputTypes);
+  OpBuilder builder(op);
+  builder.create<func::CallOp>(op.getLoc(), callee, TypeRange{},
+                 op->getOperands());
+  op.erase();
+  }
+
+  SmallVector<gemmini::TileConvOp> convs;
+  module.walk([&](gemmini::TileConvOp op) { convs.push_back(op); });
+  for (gemmini::TileConvOp op : convs) {
+  SmallVector<Type> inputTypes;
+  inputTypes.reserve(op->getNumOperands());
+  for (Value operand : op->getOperands()) {
+    inputTypes.push_back(operand.getType());
+  }
+  constexpr StringLiteral callee = "__iree_gemmini_tile_conv";
+  ensureDeclaration(callee, inputTypes);
+  OpBuilder builder(op);
+  builder.create<func::CallOp>(op.getLoc(), callee, TypeRange{},
+                 op->getOperands());
+  op.erase();
+  }
+  return success();
+}
+
+} // namespace
 
 // PrintOpLowering refers to the toy.print op.
 class PrintOpLowering : public ConversionPattern {
@@ -79,15 +203,17 @@ public:
       auto step = rewriter.create<arith::ConstantIndexOp>(loc, 1);
       auto loop =
           rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-      for (Operation &nested : *loop.getBody())
+      for (Operation &nested : *loop.getBody()) {
         rewriter.eraseOp(&nested);
+      }
       loopIvs.push_back(loop.getInductionVar());
 
       rewriter.setInsertionPointToEnd(loop.getBody());
 
-      if (i != e - 1)
+      if (i != e - 1) {
         rewriter.create<LLVM::CallOp>(loc, getPrintfType(context), printfRef,
                                       newLineCst);
+      }
       rewriter.create<scf::YieldOp>(loc);
       rewriter.setInsertionPointToStart(loop.getBody());
     }
@@ -95,12 +221,13 @@ public:
     auto printOp = cast<gemmini::PrintOp>(op);
     Value elementLoad =
         rewriter.create<memref::LoadOp>(loc, printOp.getInput(), loopIvs);
-    if (elementLoad.getType() == rewriter.getF32Type())
+    if (elementLoad.getType() == rewriter.getF32Type()) {
       elementLoad = rewriter.create<mlir::LLVM::FPExtOp>(
           loc, rewriter.getF64Type(), elementLoad);
-    else if (elementLoad.getType() == rewriter.getI8Type())
+    } else if (elementLoad.getType() == rewriter.getI8Type()) {
       elementLoad = rewriter.create<mlir::LLVM::SExtOp>(
           loc, rewriter.getI32Type(), elementLoad);
+    }
     rewriter.create<LLVM::CallOp>(
         loc, getPrintfType(context), printfRef,
         ArrayRef<Value>({formatSpecifierCst, elementLoad}));
@@ -119,8 +246,9 @@ private:
   static FlatSymbolRefAttr getOrInsertPrintf(PatternRewriter &rewriter,
                                              ModuleOp module) {
     auto *context = module.getContext();
-    if (module.lookupSymbol<LLVM::LLVMFuncOp>("printf"))
+    if (module.lookupSymbol<LLVM::LLVMFuncOp>("printf")) {
       return SymbolRefAttr::get(context, "printf");
+    }
 
     PatternRewriter::InsertionGuard insertGuard(rewriter);
     rewriter.setInsertionPointToStart(module.getBody());
@@ -181,6 +309,12 @@ public:
                               llvm::cl::desc("The type of acc_t."),
                               llvm::cl::init("i32")};
 
+  Option<bool> useCStubLowering{
+      *this, "use-c-stub-lowering",
+      llvm::cl::desc("Use legacy C-stub call lowering instead of Gemmini "
+                     "intrinsic lowering."),
+      llvm::cl::init(false)};
+
   // Override explicitly to allow conditional dialect dependence.
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<LLVM::LLVMDialect>();
@@ -196,38 +330,62 @@ public:
 } // namespace
 
 void LowerGemminiToLLVMPass::runOnOperation() {
-  MLIRContext *context = &getContext();
   ModuleOp module = getOperation();
-  // The default elem_t is int8_t,
-  // so the default size of elem_t is 1 type.
-  size_t sizeOfElemT = sizeof(int8_t);
-  if (elemType == "f32")
-    sizeOfElemT = sizeof(float);
-  // The default acc_t is int32_t,
-  // so the default size of acc_t is 4 type.
-  size_t sizeOfAccT = sizeof(int32_t);
-  if (accType == "f32")
-    sizeOfAccT = sizeof(float);
-  LLVMTypeConverter converter(context);
-  RewritePatternSet patterns(context);
-  LLVMConversionTarget target(*context);
-  configureGemminiLegalizeForExportTarget(target);
-  populateGemminiLegalizeForLLVMExportPatterns(converter, patterns, dim,
-                                               addrLen, accRows, bankRows,
-                                               sizeOfElemT, sizeOfAccT);
-  populateAffineToStdConversionPatterns(patterns);
-  populateSCFToControlFlowConversionPatterns(patterns);
-  mlir::arith::populateArithToLLVMConversionPatterns(converter, patterns);
-  populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
-  cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
-  populateFuncToLLVMConversionPatterns(converter, patterns);
-  patterns.add<PrintOpLowering>(&getContext());
-  if (failed(applyPartialConversion(module, target, std::move(patterns))))
+  if (useCStubLowering) {
+    if (failed(runStubLowering(module))) {
+      signalPassFailure();
+    }
+    return;
+  }
+
+  auto parseTypeSize = [&](StringRef type, StringRef optionName)
+      -> FailureOr<size_t> {
+    if (type == "i8")
+      return static_cast<size_t>(1);
+    if (type == "i16")
+      return static_cast<size_t>(2);
+    if (type == "i32" || type == "f32")
+      return static_cast<size_t>(4);
+    if (type == "i64" || type == "f64")
+      return static_cast<size_t>(8);
+    module.emitError() << "unsupported " << optionName << " value: " << type;
+    return failure();
+  };
+
+  FailureOr<size_t> elemSize = parseTypeSize(elemType, "elem_t");
+  FailureOr<size_t> accSize = parseTypeSize(accType, "acc_t");
+  if (failed(elemSize) || failed(accSize)) {
     signalPassFailure();
+    return;
+  }
+
+  LowerToLLVMOptions options(&getContext());
+  LLVMTypeConverter converter(&getContext(), options);
+  RewritePatternSet patterns(&getContext());
+  populateGemminiLegalizeForLLVMExportPatterns(
+      converter, patterns, dim, addrLen, accRows, bankRows, *elemSize,
+      *accSize);
+
+  LLVMConversionTarget target(getContext());
+  target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+  configureGemminiLegalizeForExportTarget(target);
+
+  if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
+    module.emitError() << "failed to legalize Gemmini ops for intrinsic "
+                          "lowering";
+    signalPassFailure();
+    return;
+  }
+
+  lowerGemminiIntrinsicsToLLVMCalls(module);
 }
 
 namespace mlir {
 namespace buddy {
+std::unique_ptr<Pass> createLowerGemminiPass() {
+  return std::make_unique<LowerGemminiToLLVMPass>();
+}
+
 void registerLowerGemminiPass() { PassRegistration<LowerGemminiToLLVMPass>(); }
 } // namespace buddy
 } // namespace mlir

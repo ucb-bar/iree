@@ -709,7 +709,7 @@ public:
       this->sysShift = propValue;
     }
     bool operator==(const Properties &rhs) const {
-      return 
+      return
         rhs.aStride == this->aStride &&
         rhs.aTranspose == this->aTranspose &&
         rhs.bTranspose == this->bTranspose &&
@@ -1109,7 +1109,7 @@ public:
       this->shrunk = propValue;
     }
     bool operator==(const Properties &rhs) const {
-      return 
+      return
         rhs.block_mvin_stride == this->block_mvin_stride &&
         rhs.id == this->id &&
         rhs.pixel_repeats == this->pixel_repeats &&
@@ -1458,7 +1458,7 @@ public:
       this->setStatsIdOnly = propValue;
     }
     bool operator==(const Properties &rhs) const {
-      return 
+      return
         rhs.StatsId == this->StatsId &&
         rhs.actMsb == this->actMsb &&
         rhs.igeluQb == this->igeluQb &&
@@ -1786,7 +1786,7 @@ public:
       this->scale = propValue;
     }
     bool operator==(const Properties &rhs) const {
-      return 
+      return
         rhs.activation == this->activation &&
         rhs.scale == this->scale &&
         true;
@@ -6233,7 +6233,7 @@ public:
       this->wrot180 = propValue;
     }
     bool operator==(const Properties &rhs) const {
-      return 
+      return
         rhs.act == this->act &&
         rhs.inputDilation == this->inputDilation &&
         rhs.kernelDilation == this->kernelDilation &&
@@ -6909,7 +6909,7 @@ public:
       this->weightA = propValue;
     }
     bool operator==(const Properties &rhs) const {
-      return 
+      return
         rhs.aScaleFactor == this->aScaleFactor &&
         rhs.aTranspose == this->aTranspose &&
         rhs.accScale == this->accScale &&
@@ -7385,4 +7385,3 @@ MLIR_DECLARE_EXPLICIT_TYPE_ID(::buddy::gemmini::TileMatMulOp)
 
 
 #endif  // GET_OP_CLASSES
-

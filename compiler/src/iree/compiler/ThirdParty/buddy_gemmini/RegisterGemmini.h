@@ -17,7 +17,9 @@
 #ifndef IREE_COMPILER_THIRDPARTY_BUDDY_GEMMINI_REGISTER_GEMMINI_H
 #define IREE_COMPILER_THIRDPARTY_BUDDY_GEMMINI_REGISTER_GEMMINI_H
 
+#include <memory>
 #include "mlir/IR/DialectRegistry.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 
 namespace buddy {
@@ -29,6 +31,8 @@ class GemminiDialect;
 namespace mlir {
 namespace buddy {
 // Forward declarations for pass registration functions
+std::unique_ptr<Pass> createLowerLinalgToGemminiPass();
+std::unique_ptr<Pass> createLowerGemminiPass();
 void registerLowerLinalgToGemminiPass();
 void registerLowerGemminiPass();
 void registerGemminiIRDumpsPass();

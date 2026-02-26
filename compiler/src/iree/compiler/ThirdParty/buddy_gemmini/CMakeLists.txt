@@ -5,12 +5,12 @@ add_subdirectory(LowerLinalgToGemmini)
 # Build registration library for integrating with IREE tools
 add_mlir_library(BuddyGemminiRegistration
   RegisterGemmini.cpp
-  
+
   PARTIAL_SOURCES_INTENDED
-  
+
   DEPENDS
     BuddyGemmini
-    
+
   LINK_LIBS PUBLIC
     BuddyGemmini
     BuddyGemminiTransforms
@@ -19,7 +19,7 @@ add_mlir_library(BuddyGemminiRegistration
     MLIRPass
     MLIRIR
     MLIRSupport
-  
+
   LINK_COMPONENTS
     Support
 )

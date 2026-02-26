@@ -12,7 +12,7 @@ add_mlir_dialect_library(BuddyGemmini
     MLIRLLVMDialect
     MLIRFuncDialect
     MLIRVectorDialect
-    
+
   LINK_COMPONENTS
     Support
 )

@@ -1,21 +1,11 @@
-# Option to enable/disable LegalizeForLLVMExport (temporarily disabled for build fixes)
-option(IREE_ENABLE_BUDDY_GEMMINI_LEGALIZE "Enable Gemmini LLVM export legalization" OFF)
-
-if(IREE_ENABLE_BUDDY_GEMMINI_LEGALIZE)
-  set(GEMMINI_TRANSFORM_SOURCES
-    LegalizeForLLVMExport.cpp
-  )
-else()
-  set(GEMMINI_TRANSFORM_SOURCES
-    Empty.cpp
-    GemminiLegalizeStubs.cpp
-  )
-endif()
+set(GEMMINI_TRANSFORM_SOURCES
+  LegalizeForLLVMExport.cpp
+)
 
 add_mlir_library(BuddyGemminiTransforms
   ${GEMMINI_TRANSFORM_SOURCES}
   GemminiIRDumps.cpp
-  
+
   PARTIAL_SOURCES_INTENDED
 
   DEPENDS

@@ -1080,14 +1080,14 @@ ConfigExOpAdaptor::ConfigExOpAdaptor(ConfigExOp op) : ConfigExOpGenericAdaptor(o
 
 llvm::hash_code ConfigExOp::computePropertiesHash(const Properties &prop) {
   return llvm::hash_combine(
-    llvm::hash_value(prop.aStride.getAsOpaquePointer()), 
-    llvm::hash_value(prop.aTranspose.getAsOpaquePointer()), 
-    llvm::hash_value(prop.bTranspose.getAsOpaquePointer()), 
-    llvm::hash_value(prop.cStride.getAsOpaquePointer()), 
-    llvm::hash_value(prop.dataflow.getAsOpaquePointer()), 
-    llvm::hash_value(prop.setOnlyStrides.getAsOpaquePointer()), 
-    llvm::hash_value(prop.sysAccScale.getAsOpaquePointer()), 
-    llvm::hash_value(prop.sysAct.getAsOpaquePointer()), 
+    llvm::hash_value(prop.aStride.getAsOpaquePointer()),
+    llvm::hash_value(prop.aTranspose.getAsOpaquePointer()),
+    llvm::hash_value(prop.bTranspose.getAsOpaquePointer()),
+    llvm::hash_value(prop.cStride.getAsOpaquePointer()),
+    llvm::hash_value(prop.dataflow.getAsOpaquePointer()),
+    llvm::hash_value(prop.setOnlyStrides.getAsOpaquePointer()),
+    llvm::hash_value(prop.sysAccScale.getAsOpaquePointer()),
+    llvm::hash_value(prop.sysAct.getAsOpaquePointer()),
     llvm::hash_value(prop.sysShift.getAsOpaquePointer()));
 }
 
@@ -1839,10 +1839,10 @@ ConfigLdOpAdaptor::ConfigLdOpAdaptor(ConfigLdOp op) : ConfigLdOpGenericAdaptor(o
 
 llvm::hash_code ConfigLdOp::computePropertiesHash(const Properties &prop) {
   return llvm::hash_combine(
-    llvm::hash_value(prop.block_mvin_stride.getAsOpaquePointer()), 
-    llvm::hash_value(prop.id.getAsOpaquePointer()), 
-    llvm::hash_value(prop.pixel_repeats.getAsOpaquePointer()), 
-    llvm::hash_value(prop.scale.getAsOpaquePointer()), 
+    llvm::hash_value(prop.block_mvin_stride.getAsOpaquePointer()),
+    llvm::hash_value(prop.id.getAsOpaquePointer()),
+    llvm::hash_value(prop.pixel_repeats.getAsOpaquePointer()),
+    llvm::hash_value(prop.scale.getAsOpaquePointer()),
     llvm::hash_value(prop.shrunk.getAsOpaquePointer()));
 }
 
@@ -2508,12 +2508,12 @@ ConfigNormOpAdaptor::ConfigNormOpAdaptor(ConfigNormOp op) : ConfigNormOpGenericA
 
 llvm::hash_code ConfigNormOp::computePropertiesHash(const Properties &prop) {
   return llvm::hash_combine(
-    llvm::hash_value(prop.StatsId.getAsOpaquePointer()), 
-    llvm::hash_value(prop.actMsb.getAsOpaquePointer()), 
-    llvm::hash_value(prop.igeluQb.getAsOpaquePointer()), 
-    llvm::hash_value(prop.igeluQc.getAsOpaquePointer()), 
-    llvm::hash_value(prop.qConst.getAsOpaquePointer()), 
-    llvm::hash_value(prop.qConstType.getAsOpaquePointer()), 
+    llvm::hash_value(prop.StatsId.getAsOpaquePointer()),
+    llvm::hash_value(prop.actMsb.getAsOpaquePointer()),
+    llvm::hash_value(prop.igeluQb.getAsOpaquePointer()),
+    llvm::hash_value(prop.igeluQc.getAsOpaquePointer()),
+    llvm::hash_value(prop.qConst.getAsOpaquePointer()),
+    llvm::hash_value(prop.qConstType.getAsOpaquePointer()),
     llvm::hash_value(prop.setStatsIdOnly.getAsOpaquePointer()));
 }
 
@@ -3060,7 +3060,7 @@ ConfigStOpAdaptor::ConfigStOpAdaptor(ConfigStOp op) : ConfigStOpGenericAdaptor(o
 
 llvm::hash_code ConfigStOp::computePropertiesHash(const Properties &prop) {
   return llvm::hash_combine(
-    llvm::hash_value(prop.activation.getAsOpaquePointer()), 
+    llvm::hash_value(prop.activation.getAsOpaquePointer()),
     llvm::hash_value(prop.scale.getAsOpaquePointer()));
 }
 
@@ -6559,19 +6559,19 @@ TileConvOpAdaptor::TileConvOpAdaptor(TileConvOp op) : TileConvOpGenericAdaptor(o
 
 llvm::hash_code TileConvOp::computePropertiesHash(const Properties &prop) {
   return llvm::hash_combine(
-    llvm::hash_value(prop.act.getAsOpaquePointer()), 
-    llvm::hash_value(prop.inputDilation.getAsOpaquePointer()), 
-    llvm::hash_value(prop.kernelDilation.getAsOpaquePointer()), 
-    llvm::hash_value(prop.padding.getAsOpaquePointer()), 
-    llvm::hash_value(prop.poolPadding.getAsOpaquePointer()), 
-    llvm::hash_value(prop.poolSize.getAsOpaquePointer()), 
-    llvm::hash_value(prop.poolStride.getAsOpaquePointer()), 
-    llvm::hash_value(prop.scale.getAsOpaquePointer()), 
-    llvm::hash_value(prop.stride.getAsOpaquePointer()), 
-    llvm::hash_value(prop.transInput3120.getAsOpaquePointer()), 
-    llvm::hash_value(prop.transOutput1203.getAsOpaquePointer()), 
-    llvm::hash_value(prop.transWeight0132.getAsOpaquePointer()), 
-    llvm::hash_value(prop.transWeight1203.getAsOpaquePointer()), 
+    llvm::hash_value(prop.act.getAsOpaquePointer()),
+    llvm::hash_value(prop.inputDilation.getAsOpaquePointer()),
+    llvm::hash_value(prop.kernelDilation.getAsOpaquePointer()),
+    llvm::hash_value(prop.padding.getAsOpaquePointer()),
+    llvm::hash_value(prop.poolPadding.getAsOpaquePointer()),
+    llvm::hash_value(prop.poolSize.getAsOpaquePointer()),
+    llvm::hash_value(prop.poolStride.getAsOpaquePointer()),
+    llvm::hash_value(prop.scale.getAsOpaquePointer()),
+    llvm::hash_value(prop.stride.getAsOpaquePointer()),
+    llvm::hash_value(prop.transInput3120.getAsOpaquePointer()),
+    llvm::hash_value(prop.transOutput1203.getAsOpaquePointer()),
+    llvm::hash_value(prop.transWeight0132.getAsOpaquePointer()),
+    llvm::hash_value(prop.transWeight1203.getAsOpaquePointer()),
     llvm::hash_value(prop.wrot180.getAsOpaquePointer()));
 }
 
@@ -8125,18 +8125,18 @@ TileMatMulOpAdaptor::TileMatMulOpAdaptor(TileMatMulOp op) : TileMatMulOpGenericA
 
 llvm::hash_code TileMatMulOp::computePropertiesHash(const Properties &prop) {
   return llvm::hash_combine(
-    llvm::hash_value(prop.aScaleFactor.getAsOpaquePointer()), 
-    llvm::hash_value(prop.aTranspose.getAsOpaquePointer()), 
-    llvm::hash_value(prop.accScale.getAsOpaquePointer()), 
-    llvm::hash_value(prop.act.getAsOpaquePointer()), 
-    llvm::hash_value(prop.bScaleFactor.getAsOpaquePointer()), 
-    llvm::hash_value(prop.bTranspose.getAsOpaquePointer()), 
-    llvm::hash_value(prop.bertScale.getAsOpaquePointer()), 
-    llvm::hash_value(prop.dScaleFactor.getAsOpaquePointer()), 
-    llvm::hash_value(prop.dataflow.getAsOpaquePointer()), 
-    llvm::hash_value(prop.fullC.getAsOpaquePointer()), 
-    llvm::hash_value(prop.lowD.getAsOpaquePointer()), 
-    llvm::hash_value(prop.repeatingBias.getAsOpaquePointer()), 
+    llvm::hash_value(prop.aScaleFactor.getAsOpaquePointer()),
+    llvm::hash_value(prop.aTranspose.getAsOpaquePointer()),
+    llvm::hash_value(prop.accScale.getAsOpaquePointer()),
+    llvm::hash_value(prop.act.getAsOpaquePointer()),
+    llvm::hash_value(prop.bScaleFactor.getAsOpaquePointer()),
+    llvm::hash_value(prop.bTranspose.getAsOpaquePointer()),
+    llvm::hash_value(prop.bertScale.getAsOpaquePointer()),
+    llvm::hash_value(prop.dScaleFactor.getAsOpaquePointer()),
+    llvm::hash_value(prop.dataflow.getAsOpaquePointer()),
+    llvm::hash_value(prop.fullC.getAsOpaquePointer()),
+    llvm::hash_value(prop.lowD.getAsOpaquePointer()),
+    llvm::hash_value(prop.repeatingBias.getAsOpaquePointer()),
     llvm::hash_value(prop.weightA.getAsOpaquePointer()));
 }
 
@@ -9036,4 +9036,3 @@ MLIR_DEFINE_EXPLICIT_TYPE_ID(::buddy::gemmini::TileMatMulOp)
 
 
 #endif  // GET_OP_CLASSES
-

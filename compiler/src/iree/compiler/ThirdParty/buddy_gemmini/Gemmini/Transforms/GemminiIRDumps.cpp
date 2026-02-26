@@ -1,11 +1,11 @@
 #include "Gemmini/GemminiOps.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/raw_ostream.h"
 
 namespace mlir::buddy {
 namespace {
@@ -44,11 +44,13 @@ public:
         matched = true;
       }
       if (dumpGemmini &&
-          isa<::buddy::gemmini::TileMatMulOp, ::buddy::gemmini::TileConvOp>(op)) {
+          isa<::buddy::gemmini::TileMatMulOp, ::buddy::gemmini::TileConvOp>(
+              op)) {
         matched = true;
       }
-      if (!matched)
+      if (!matched) {
         return;
+      }
 
       os << "GEMMINI_IR_DUMP: " << op->getName() << "\n";
       if (auto funcOp = op->getParentOfType<func::FuncOp>()) {

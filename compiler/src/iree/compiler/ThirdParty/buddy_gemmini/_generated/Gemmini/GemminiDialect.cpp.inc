@@ -13,9 +13,9 @@ namespace gemmini {
 
 GemminiDialect::GemminiDialect(::mlir::MLIRContext *context)
     : ::mlir::Dialect(getDialectNamespace(), context, ::mlir::TypeID::get<GemminiDialect>())
-    
+
      {
-  
+
   initialize();
 }
 

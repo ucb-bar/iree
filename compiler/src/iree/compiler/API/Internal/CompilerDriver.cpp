@@ -46,6 +46,7 @@
 #include "iree/compiler/Dialect/VM/Transforms/Passes.h"
 #include "iree/compiler/Pipelines/Pipelines.h"
 #include "iree/compiler/PluginAPI/PluginManager.h"
+#include "iree/compiler/ThirdParty/buddy_gemmini/Gemmini/GemminiDialect.h"
 #include "iree/compiler/Tools/init_dialects.h"
 #include "iree/compiler/Tools/init_llvmir_translations.h"
 #include "iree/compiler/Tools/init_passes.h"
@@ -423,6 +424,7 @@ Session::Session(GlobalInit &globalInit)
       pluginSession(globalInit.pluginManager, binder, pluginManagerOptions) {
   context.allowUnregisteredDialects();
   context.appendDialectRegistry(globalInit.registry);
+  context.getOrLoadDialect<::buddy::gemmini::GemminiDialect>();
 
   // Bootstrap session options from the cl environment, if enabled.
   if (globalInit.usesCommandLine) {

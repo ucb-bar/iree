@@ -70,7 +70,7 @@ inline void registerIreeDialects(DialectRegistry &registry) {
   // Register transform dialect extensions.
   registerTransformDialectPreprocessingExtension(registry);
   IREE::Util::registerTransformDialectExtension(registry);
-  
+
   // Register Gemmini dialect.
   registry.insert<::buddy::gemmini::GemminiDialect>();
 }

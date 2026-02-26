@@ -14,6 +14,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -24,8 +26,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include "Gemmini/GemminiDialect.h"
 #include "Gemmini/GemminiOps.h"
@@ -104,8 +104,9 @@ class ForwardOperands : public OpConversionPattern<OpTy> {
   LogicalResult
   matchAndRewrite(OpTy op, typename OpTy::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const final {
-    if (adaptor.getOperands().getTypes() == op->getOperands().getTypes())
+    if (adaptor.getOperands().getTypes() == op->getOperands().getTypes()) {
       return rewriter.notifyMatchFailure(op, "operand types already match");
+    }
     rewriter.modifyOpInPlace(op,
                              [&]() { op->setOperands(adaptor.getOperands()); });
     return success();
@@ -183,8 +184,9 @@ struct GemminiConfigLdLowering : public ConvertOpToLLVMPattern<ConfigLdOp> {
     Value rs2Value = configLdOp.getStride();
     float scale = configLdOp.getScale().convertToFloat();
     uint64_t blockMvinStride = configLdOp.getBlockMvinStride();
-    if (blockMvinStride == (uint64_t)-1)
+    if (blockMvinStride == (uint64_t)-1) {
       blockMvinStride = dim;
+    }
     uint64_t pixelRepeats = configLdOp.getPixelRepeats();
     uint64_t rs1 = (uint64_t)scale_t_to_scale_t_bits(scale) << 32 |
                    (blockMvinStride << 16) | pixelRepeats << 8 |
@@ -437,12 +439,12 @@ struct GemminiPreloadZerosLowering
         loc, rewriter.getI64IntegerAttr(rs1));
     Value rs2Value = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getI64IntegerAttr(rs2));
-auto newOp = rewriter.create<Preload_IntrOp>(loc, rs1Value, rs2Value);
-if (preloadZerosOp->getNumResults() == 0) {
-  rewriter.eraseOp(preloadZerosOp);
-} else {
-  rewriter.replaceOp(preloadZerosOp, newOp.getResults());
-}                                                rs2Value);
+    auto newOp = rewriter.create<Preload_IntrOp>(loc, rs1Value, rs2Value);
+    if (preloadZerosOp->getNumResults() == 0) {
+      rewriter.eraseOp(preloadZerosOp);
+    } else {
+      rewriter.replaceOp(preloadZerosOp, newOp->getResults());
+    }
     return success();
   }
 
@@ -522,12 +524,13 @@ struct GemminiComputePreloadedLowering
         loc, rewriter.getI64IntegerAttr(rs1));
     Value rs2Value = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getI64IntegerAttr(rs2));
-auto newOp = rewriter.create<ComputePreloaded_IntrOp>(loc, rs1Value, rs2Value);
-if (computePreloadedOp->getNumResults() == 0) {
-  rewriter.eraseOp(computePreloadedOp);
-} else {
-  rewriter.replaceOp(computePreloadedOp, newOp.getResults());
-}                                                         rs1Value, rs2Value);
+    auto newOp =
+        rewriter.create<ComputePreloaded_IntrOp>(loc, rs1Value, rs2Value);
+    if (computePreloadedOp->getNumResults() == 0) {
+      rewriter.eraseOp(computePreloadedOp);
+    } else {
+      rewriter.replaceOp(computePreloadedOp, newOp->getResults());
+    }
     return success();
   }
 
@@ -564,12 +567,13 @@ struct GemminiComputeAccumulatedLowering
         loc, rewriter.getI64IntegerAttr(rs1));
     Value rs2Value = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getI64IntegerAttr(rs2));
-auto newOp = rewriter.create<ComputeAccumulated_IntrOp>(loc, rs1Value, rs2Value);
-if (computeAccumulatedOp->getNumResults() == 0) {
-  rewriter.eraseOp(computeAccumulatedOp);
-} else {
-  rewriter.replaceOp(computeAccumulatedOp, newOp.getResults());
-}                                                           rs1Value, rs2Value);
+    auto newOp =
+        rewriter.create<ComputeAccumulated_IntrOp>(loc, rs1Value, rs2Value);
+    if (computeAccumulatedOp->getNumResults() == 0) {
+      rewriter.eraseOp(computeAccumulatedOp);
+    } else {
+      rewriter.replaceOp(computeAccumulatedOp, newOp->getResults());
+    }
 
     return success();
   }
@@ -880,8 +884,8 @@ class GemminiTileMatMulLowering : public ConvertOpToLLVMPattern<TileMatMulOp> {
       rewriter.create<ConfigNormOp>(loc, qln2_inv, 1, 0, 1, 0, qb, qc);
     }
 
-    for (size_t i0 = 0; i0 < I0; i0++)
-      for (size_t j0 = 0; j0 < J0; j0++)
+    for (size_t i0 = 0; i0 < I0; i0++) {
+      for (size_t j0 = 0; j0 < J0; j0++) {
         for (size_t k0 = 0; k0 < K0; k0++) {
           Value pre;
           Location loc = A.getLoc();
@@ -969,6 +973,8 @@ class GemminiTileMatMulLowering : public ConvertOpToLLVMPattern<TileMatMulOp> {
                             tileMatMulOp, rewriter);
           }
         }
+      }
+    }
     IntegerAttr flushAttr = rewriter.getI64IntegerAttr(0);
     Value flushValue = rewriter.create<arith::ConstantOp>(
         loc, rewriter.getI64Type(), flushAttr);
@@ -1123,8 +1129,9 @@ public:
         tileK++;
         increased = true;
       }
-      if (!increased)
+      if (!increased) {
         break;
+      }
     }
     int dataflow = tileMatMulOp.getDataflow();
 
@@ -1270,8 +1277,9 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
                                   kernelDilation > 1 || ichs > dim
                               ? 1
                               : dim / ichs;
-    if (maxPixelsPerRow > kcols)
+    if (maxPixelsPerRow > kcols) {
       maxPixelsPerRow = kcols;
+    }
 #else
     const int maxPixelsPerRow = 1;
 #endif
@@ -1328,8 +1336,8 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
       rewriter.create<ConfigLdOp>(loc, zeroValue,
                                   llvm::APFloat((float)MVIN_SCALE_IDENTITY),
                                   false, 2, batches * orows * ocols);
-      for (int b = 0; b < batches; b++)
-        for (int orow = 0; orow < orows; orow++)
+      for (int b = 0; b < batches; b++) {
+        for (int orow = 0; orow < orows; orow++) {
           for (int ocol = 0; ocol < ocols; ocol += dim) {
             const int I = ocols - ocol > dim ? dim : ocols - ocol;
             for (int och = 0; och < ochs; och += maxOchsPerMvin) {
@@ -1348,6 +1356,8 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
               }
             }
           }
+        }
+      }
     }
     // mvin input
     if (input != NULL) {
@@ -1370,7 +1380,7 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
                                   false, 0, spadStride, maxPixelsPerRow);
       const int b_it = transInput3120 ? maxChsPerMvin : 1;
       const int ich_it = transInput3120 ? 1 : maxChsPerMvin;
-      for (int b = 0; b < batches; b += b_it)
+      for (int b = 0; b < batches; b += b_it) {
         for (int irow = -UNDILATED(upad);
              irow < irowsUnpadded + UNDILATED(dpad); irow += 1 + downsample) {
           const int irowPadded = irow + UNDILATED(upad);
@@ -1427,6 +1437,7 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
             icol += I;
           }
         }
+      }
     }
     // mvin weights
     if (weights != NULL) {
@@ -1455,8 +1466,8 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
       const size_t och_it = transWeight0132 ? dim : max_chs_per_mvin;
       const size_t kch_it = transWeight0132 ? max_chs_per_mvin : dim;
       for (int och = 0; och < ochs; och += och_it) {
-        for (int krow = 0; krow < krows; krow++)
-          for (int kcol = 0; kcol < kcols; kcol++)
+        for (int krow = 0; krow < krows; krow++) {
+          for (int kcol = 0; kcol < kcols; kcol++) {
             for (int kch = 0; kch < kchs; kch += kch_it) {
               int K = kchs - kch > dim ? dim : kchs - kch;
               int J =
@@ -1493,6 +1504,8 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
               gemminiMvinOffset<Mvin2_IntrOp>(weights, offset * sizeOfElemT,
                                               bSpAddr, J, K, addrLen, rewriter);
             }
+          }
+        }
       }
     }
     // Compute
@@ -1622,8 +1635,8 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
     // mvout output
     if (output != NULL) {
       if (noPool) {
-        for (int b = 0; b < batches; b++)
-          for (int orow = 0; orow < orows; orow++)
+        for (int b = 0; b < batches; b++) {
+          for (int orow = 0; orow < orows; orow++) {
             for (int ocol = 0; ocol < ocols; ocol += dim) {
               const int I = ocols - ocol > dim ? dim : ocols - ocol;
               for (int och = 0; och < ochs; och += dim) {
@@ -1645,6 +1658,8 @@ class GemminiTileConvLowering : public ConvertOpToLLVMPattern<TileConvOp> {
                                    I, addrLen, rewriter);
               }
             }
+          }
+        }
       } else {
         printf("Pooling with rectangular convolutions is currently not "
                "supported.\n");
@@ -2077,8 +2092,9 @@ public:
                              args[4], args[5], args[6]};
       argsCandidate[ocolsIdx]++;
 
-      if (argsCandidate[ocolsIdx] > maxArgs[ocolsIdx])
+      if (argsCandidate[ocolsIdx] > maxArgs[ocolsIdx]) {
         continue;
+      }
 
       spadRows = tiledConvTotalSpadRows(
           false, stride, inputDilation, kernelDilation, downsample,
@@ -2105,8 +2121,9 @@ public:
                                args[4], args[5], args[6]};
         argsCandidate[i]++;
 
-        if (argsCandidate[i] > maxArgs[i])
+        if (argsCandidate[i] > maxArgs[i]) {
           continue;
+        }
         spadRows = tiledConvTotalSpadRows(
             false, stride, inputDilation, kernelDilation, downsample,
             transWeight0132, transInput3120, argsCandidate[0], argsCandidate[1],

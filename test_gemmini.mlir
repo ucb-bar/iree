@@ -4,17 +4,17 @@ module {
     // Test basic Gemmini operations
     %c0 = arith.constant 0 : i64
     %c1 = arith.constant 1 : i64
-    
+
     // Test ConfigLd operation
     %scale = arith.constant 1.0 : f32
     gemmini.config_ld %c1 scale(%scale)
-    
-    // Test Mvin operation  
+
+    // Test Mvin operation
     gemmini.mvin %arg0 -> %c0
-    
+
     // Test Flush operation
     gemmini.flush %c0
-    
+
     return
   }
 }

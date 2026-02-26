@@ -13,6 +13,7 @@
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenInterfaces.h"
 #include "iree/compiler/Codegen/LLVMCPU/Passes.h"
 #include "iree/compiler/Dialect/LinalgExt/Transforms/Passes.h"
+#include "iree/compiler/ThirdParty/buddy_gemmini/RegisterGemmini.h"
 #include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "iree/compiler/Utils/PassUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -34,6 +35,7 @@
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 
 #define DEBUG_TYPE "iree-llvmcpu-pass-pipelines"
@@ -90,6 +92,13 @@ static llvm::cl::opt<bool> clUseSoftmaxInterFusion(
     "iree-llvmcpu-use-decompose-softmax-fuse",
     llvm::cl::desc("Enables inter-pass fusion for the DecomposeSoftmax pass."),
     llvm::cl::init(true));
+
+static llvm::cl::opt<bool> clEnableGemminiLinalgLowering(
+    "iree-llvmcpu-enable-gemmini-linalg-lowering",
+    llvm::cl::desc(
+        "Enable lowering of Linalg ops to the Gemmini dialect in the LLVMCPU "
+        "pipeline (requires Gemmini passes to be registered)."),
+    llvm::cl::init(false));
 
 static llvm::cl::opt<bool> clEnableVectorContractCustomKernels(
     "iree-llvmcpu-enable-vector-contract-custom-kernels",
@@ -189,6 +198,11 @@ void buildLLVMCPUVectorLoweringPipeline(
 
 void addCPUBufferOpsTileAndVectorizePipeline(
     OpPassManager &funcPassManager, const LLVMCPUPipelineOptions &pipelineOpt) {
+  if (clEnableGemminiLinalgLowering) {
+    addCPUDefaultPassPipeline(funcPassManager, pipelineOpt);
+    return;
+  }
+
   addTileAndDistributePasses(funcPassManager, pipelineOpt);
 
   // Skip tiling reduction loops because this is expected to apply on copy ops
@@ -226,6 +240,11 @@ void addMultiTilingExpertPassPipeline(
     OpPassManager &funcPassManager,
     IREE::Codegen::LoweringConfigAttrInterface loweringConfig,
     const LLVMCPUPipelineOptions &pipelineOpt) {
+  if (clEnableGemminiLinalgLowering) {
+    addCPUDefaultPassPipeline(funcPassManager, pipelineOpt);
+    return;
+  }
+
   addTileAndDistributePasses(funcPassManager, pipelineOpt);
   for (int i : IREE::CPU::getTilingLevelsAsInts()) {
     if (!loweringConfig.hasTilingLevel(i)) {
@@ -322,6 +341,11 @@ void addMultiTilingExpertPassPipeline(
 
 void addConvTileAndDecomposeExpertPassPipeline(
     OpPassManager &funcPassManager, const LLVMCPUPipelineOptions &pipelineOpt) {
+  if (clEnableGemminiLinalgLowering) {
+    addCPUDefaultPassPipeline(funcPassManager, pipelineOpt);
+    return;
+  }
+
   addTileAndDistributePasses(funcPassManager, pipelineOpt);
 
   funcPassManager.addPass(createLLVMCPUTileAndFuseProducerConsumerPass(
@@ -378,6 +402,11 @@ void addConvTileAndDecomposeExpertPassPipeline(
 
 void addMmt4dTilingExpertPassPipeline(
     OpPassManager &funcPassManager, const LLVMCPUPipelineOptions &pipelineOpt) {
+  if (clEnableGemminiLinalgLowering) {
+    addCPUDefaultPassPipeline(funcPassManager, pipelineOpt);
+    return;
+  }
+
   addTileAndDistributePasses(funcPassManager, pipelineOpt);
 
   funcPassManager.addPass(createLLVMCPUTileAndFuseProducerConsumerPass(
@@ -432,6 +461,11 @@ void addMmt4dTilingExpertPassPipeline(
 
 void addCPUDataTilingPipeline(OpPassManager &funcPassManager,
                               const LLVMCPUPipelineOptions &pipelineOpt) {
+  if (clEnableGemminiLinalgLowering) {
+    addCPUDefaultPassPipeline(funcPassManager, pipelineOpt);
+    return;
+  }
+
   addTileAndDistributePasses(funcPassManager, pipelineOpt);
 
   // The below two passes are nop if pack/unpack is not specified in ukernels
@@ -473,6 +507,11 @@ void addCPUDataTilingPipeline(OpPassManager &funcPassManager,
 
 void addCPULinalgExtTileAndVectorizePipeline(
     OpPassManager &funcPassManager, const LLVMCPUPipelineOptions &pipelineOpt) {
+  if (clEnableGemminiLinalgLowering) {
+    addCPUDefaultPassPipeline(funcPassManager, pipelineOpt);
+    return;
+  }
+
   addTileAndDistributePasses(funcPassManager, pipelineOpt);
   funcPassManager.addPass(createLLVMCPUTileAndFuseProducerConsumerPass(
       IREE::CPU::TilingLevel::VectorCommonParallelTiles));
@@ -529,6 +568,10 @@ static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
 
   // Lower `ukernel.*` ops to function calls
   modulePassManager.addPass(createLowerUKernelOpsToCallsPass());
+
+  if (clEnableGemminiLinalgLowering) {
+    modulePassManager.addPass(mlir::buddy::createLowerLinalgToGemminiPass());
+  }
 
   FunctionLikeNest(modulePassManager)
       // LinalgExt -> SCF
@@ -636,6 +679,9 @@ static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
     FunctionLikeNest(modulePassManager).addPass([&] {
       return createConvertArmSMEToLLVMPass();
     });
+  }
+  if (clEnableGemminiLinalgLowering) {
+    modulePassManager.addPass(mlir::buddy::createLowerGemminiPass());
   }
   modulePassManager.addPass(
       createConvertToLLVMPass(clEnableReassociateFpReductions));

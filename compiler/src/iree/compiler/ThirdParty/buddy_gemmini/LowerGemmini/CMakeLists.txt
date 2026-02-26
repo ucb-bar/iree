@@ -1,17 +1,17 @@
 add_mlir_library(LowerGemminiPass
   LowerGemminiPass.cpp
-  
+
   PARTIAL_SOURCES_INTENDED
 
   DEPENDS
     BuddyGemmini
-    
+
   LINK_LIBS PUBLIC
     BuddyGemmini
     BuddyGemminiTransforms
     MLIRIR
     MLIRSupport
-  
+
   LINK_COMPONENTS
     Support
 )

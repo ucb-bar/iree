@@ -47,7 +47,7 @@ public:
     Value input0 = inputs[0];
     Value input1 = inputs[1];
     Value output0 = ouputs[0];
-    MemRefType input0Type =  dyn_cast<MemRefType>(input0.getType());
+    MemRefType input0Type = dyn_cast<MemRefType>(input0.getType());
     MemRefType biasType =
         MemRefType::get(input0Type.getShape(), rewriter.getI32Type());
     TypedAttr fillOpInputAttr = rewriter.getI32IntegerAttr(0);
@@ -64,7 +64,7 @@ public:
         rewriter.create<arith::ConstantOp>(loc, fillOpInsType, fillOpInputAttr);
     rewriter.create<linalg::FillOp>(loc, fillOpInputValue, bias);
     auto tileMatMulOp = rewriter.create<gemmini::TileMatMulOp>(
-        matMulOp.getLoc(), input0, input1, output0, bias, 
+        matMulOp.getLoc(), input0, input1, output0, bias,
         /*aScaleFactor = */ scale1,
         /*bScaleFactor = */ scale1, /*dScaleFactor = */ scale1, /*act = */ 0,
         /*accScale = */ scale1, /*bertScale = */ scale0);
@@ -90,9 +90,9 @@ public:
     Value input1 = inputs[1];
     Value output = convOp.getOutputs()[0];
     Location loc = convOp.getLoc();
-    MemRefType inputType =  dyn_cast<MemRefType>(input0.getType());
-    MemRefType weightsType =  dyn_cast<MemRefType>(input1.getType());
-    MemRefType outputType =  dyn_cast<MemRefType>(output.getType());
+    MemRefType inputType = dyn_cast<MemRefType>(input0.getType());
+    MemRefType weightsType = dyn_cast<MemRefType>(input1.getType());
+    MemRefType outputType = dyn_cast<MemRefType>(output.getType());
     ArrayRef<int64_t> inputShape = inputType.getShape();
     ArrayRef<int64_t> outputShape = outputType.getShape();
     ArrayRef<int64_t> weightsShape = weightsType.getShape();
@@ -104,10 +104,12 @@ public:
     size_t dilations = 1;
     size_t strides = 1;
     // Gemmini only support 1-D dilations.
-    if (dilationsAttr)
+    if (dilationsAttr) {
       dilations = (*dilationsAttr.begin()).getLimitedValue();
-    if (stridesAttr)
+    }
+    if (stridesAttr) {
       strides = (*stridesAttr.begin()).getLimitedValue();
+    }
     SmallVector<int64_t> inputMatShape = {inputShape[0], inputShape[2],
                                           inputShape[3], inputShape[1]};
     SmallVector<int64_t> weightsMatShape = {
@@ -119,8 +121,9 @@ public:
     Value weightsMat = rewriter.create<memref::AllocOp>(loc, weightsMatType);
     MemRefType biasType =
         MemRefType::get(weightsShape[0], rewriter.getI32Type());
-    if (accType == "f32")
+    if (accType == "f32") {
       biasType = MemRefType::get(weightsShape[0], rewriter.getF32Type());
+    }
     SmallVector<int64_t, 2> outputMatShape = {
         inputShape[0] * outputShape[2] * outputShape[3], outputShape[1]};
     MemRefType outputMatType = MemRefType::get(outputMatShape, outputElemType);
@@ -145,8 +148,9 @@ public:
           rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
       loopIvs0.push_back(loop.getInductionVar());
       rewriter.setInsertionPointToStart(loop.getBody());
-      if (i == 0)
+      if (i == 0) {
         loopOp = loop.getOperation();
+      }
     }
     loopIvs1.push_back(loopIvs0[0]);
     loopIvs1.push_back(loopIvs0[2]);
@@ -166,8 +170,9 @@ public:
           rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
       loopIvs0.push_back(loop.getInductionVar());
       rewriter.setInsertionPointToStart(loop.getBody());
-      if (i == 0)
+      if (i == 0) {
         loopOp = loop.getOperation();
+      }
     }
     Value tmp0 =
         rewriter.create<arith::MulIOp>(loc, /*krow*/ loopIvs0[2], kernelDim);
@@ -198,8 +203,9 @@ public:
           rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
       loopIvs0.push_back(loop.getInductionVar());
       rewriter.setInsertionPointToStart(loop.getBody());
-      if (i == 0)
+      if (i == 0) {
         loopOp = loop.getOperation();
+      }
     }
     outDim = rewriter.create<arith::ConstantIndexOp>(loc, outputShape[2]);
     tmp0 = rewriter.create<arith::MulIOp>(loc, loopIvs0[0], outDim);
@@ -235,9 +241,9 @@ public:
     Value kernel = convOp.getInputs()[1];
     Value output = convOp.getOutputs()[0];
     Location loc = convOp.getLoc();
-    MemRefType inputType =  dyn_cast<MemRefType>(input.getType());
-    MemRefType kernelType =  dyn_cast<MemRefType>(kernel.getType());
-    MemRefType outputType =  dyn_cast<MemRefType>(output.getType());
+    MemRefType inputType = dyn_cast<MemRefType>(input.getType());
+    MemRefType kernelType = dyn_cast<MemRefType>(kernel.getType());
+    MemRefType outputType = dyn_cast<MemRefType>(output.getType());
     Type kernelElemType = kernelType.getElementType();
     Type outputElemType = outputType.getElementType();
     ArrayRef<int64_t> inputShape = inputType.getShape();
@@ -246,16 +252,20 @@ public:
     size_t dilations = 1;
     size_t strides = 1;
     // Gemmini only support 1-D dilations.
-    if (dilationsAttr)
+    if (dilationsAttr) {
       dilations = (*dilationsAttr.begin()).getLimitedValue();
-    if (stridesAttr)
+    }
+    if (stridesAttr) {
       strides = (*stridesAttr.begin()).getLimitedValue();
+    }
 
-    if (inputShape[1] != inputShape[2])
+    if (inputShape[1] != inputShape[2]) {
       return failure();
+    }
     ArrayRef<int64_t> kernelShape = kernelType.getShape();
-    if (kernelShape[0] != kernelShape[1])
+    if (kernelShape[0] != kernelShape[1]) {
       return failure();
+    }
     ArrayRef<int64_t> outputShape = outputType.getShape();
     // Create kernelMat and outputMat.
     SmallVector<int64_t> memRefShape = {
@@ -268,12 +278,14 @@ public:
     Value outputMat = rewriter.create<memref::AllocOp>(loc, outputMatType);
     memRefShape.assign({outputShape[3]});
     MemRefType biasType = MemRefType::get(memRefShape, rewriter.getI32Type());
-    if (accType == "f32")
+    if (accType == "f32") {
       biasType = MemRefType::get(memRefShape, rewriter.getF32Type());
+    }
     Value bias = rewriter.create<memref::AllocOp>(loc, biasType);
     TypedAttr attr = rewriter.getI32IntegerAttr(0);
-    if (accType == "f32")
+    if (accType == "f32") {
       attr = rewriter.getF32FloatAttr(0);
+    }
     Value constant0 = rewriter.create<arith::ConstantOp>(loc, attr);
     SmallVector<Value, 1> inputs = {constant0};
     SmallVector<Value, 1> outputs = {bias};
@@ -289,8 +301,9 @@ public:
       auto loop =
           rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
       loopIvs.push_back(loop.getInductionVar());
-      if (i == 0)
+      if (i == 0) {
         loopOp = loop.getOperation();
+      }
       rewriter.setInsertionPointToStart(loop.getBody());
     }
     Value kernelDim =
@@ -323,8 +336,9 @@ public:
       auto loop =
           rewriter.create<scf::ForOp>(loc, lowerBound, upperBound, step);
       loopIvs.push_back(loop.getInductionVar());
-      if (i == 0)
+      if (i == 0) {
         loopOp = loop.getOperation();
+      }
       rewriter.setInsertionPointToStart(loop.getBody());
     }
 
@@ -361,11 +375,11 @@ public:
     Value input0 = inputs[0];
     Value input1 = inputs[1];
     Value output = batchMatMulOp.getOutputs()[0];
-    MemRefType input0Type =  dyn_cast<MemRefType>(input0.getType());
+    MemRefType input0Type = dyn_cast<MemRefType>(input0.getType());
     ArrayRef<int64_t> input0Shape = input0Type.getShape();
-    MemRefType input1Type =  dyn_cast<MemRefType>(input1.getType());
+    MemRefType input1Type = dyn_cast<MemRefType>(input1.getType());
     ArrayRef<int64_t> input1Shape = input1Type.getShape();
-    MemRefType outputType =  dyn_cast<MemRefType>(output.getType());
+    MemRefType outputType = dyn_cast<MemRefType>(output.getType());
     ArrayRef<int64_t> outputShape = outputType.getShape();
     Type elemType = input0Type.getElementType();
     for (unsigned i = 0; i != input0Shape[0]; i++) {
@@ -440,7 +454,7 @@ public:
                               llvm::cl::desc("The type of acc_t."),
                               llvm::cl::init("i32")};
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<gemmini::GemminiDialect, func::FuncDialect,
+    registry.insert<::buddy::gemmini::GemminiDialect, func::FuncDialect,
                     memref::MemRefDialect, linalg::LinalgDialect,
                     arith::ArithDialect, scf::SCFDialect>();
   }
@@ -451,17 +465,23 @@ void LowerLinalgToGemminiPass::runOnOperation() {
   MLIRContext *context = &getContext();
   ModuleOp module = getOperation();
   ConversionTarget target(*context);
-  target.addLegalDialect<memref::MemRefDialect, gemmini::GemminiDialect,
+  target.addLegalDialect<memref::MemRefDialect,
+                         ::buddy::gemmini::GemminiDialect,
                          arith::ArithDialect, scf::SCFDialect>();
   target.addLegalOp<linalg::FillOp, linalg::YieldOp>();
   RewritePatternSet patterns(context);
   populateLowerLinalgToGemminiConversionPatterns(patterns, accType);
-  if (failed(applyPartialConversion(module, target, std::move(patterns))))
+  if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();
+  }
 }
 
 namespace mlir {
 namespace buddy {
+std::unique_ptr<Pass> createLowerLinalgToGemminiPass() {
+  return std::make_unique<LowerLinalgToGemminiPass>();
+}
+
 void registerLowerLinalgToGemminiPass() {
   PassRegistration<LowerLinalgToGemminiPass>();
 }

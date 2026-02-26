@@ -84,6 +84,15 @@ StringAttr getEnableLoopPeelingAttrName(MLIRContext *ctx) {
 }
 std::string getEnableLoopPeelingStr() { return kLoopPeelingAttrName; }
 
+static const char kGemminiLinalgLoweringAttrName[] =
+    "enable_gemmini_linalg_lowering";
+StringAttr getEnableGemminiLinalgLoweringAttrName(MLIRContext *ctx) {
+  return StringAttr::get(ctx, kGemminiLinalgLoweringAttrName);
+}
+std::string getEnableGemminiLinalgLoweringStr() {
+  return kGemminiLinalgLoweringAttrName;
+}
+
 bool isOptEnabled(FunctionOpInterface funcOp, StringRef label) {
   DictionaryAttr config = getTranslationInfo(funcOp).getConfiguration();
   return config && config.contains(label);

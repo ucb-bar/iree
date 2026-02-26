@@ -16,4 +16,3 @@ class AsmPrinter;
 } // namespace mlir
 
 #endif  // GET_TYPEDEF_CLASSES
-

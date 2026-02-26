@@ -1,11 +1,11 @@
 add_mlir_library(LowerLinalgToGemminiPass
   LowerLinalgToGemmini.cpp
-  
+
   PARTIAL_SOURCES_INTENDED
-  
+
   DEPENDS
     BuddyGemmini
-  
+
   LINK_LIBS PUBLIC
     BuddyGemmini
     MLIRLinalgDialect
@@ -15,7 +15,7 @@ add_mlir_library(LowerLinalgToGemminiPass
     MLIRFuncDialect
     MLIRTransforms
     MLIRIR
-  
+
   LINK_COMPONENTS
     Support
 )
