@@ -11,6 +11,57 @@ constraints and special considerations of mobile and edge deployments.
 See [our website](https://iree.dev/) for project details, user
 guides, and instructions on building from source.
 
+## Gemmini plugin quickstart
+
+This repository now includes a Gemmini compiler plugin at
+`compiler/plugins/gemmini`, following the same static-plugin registration flow
+as other IREE compiler plugins.
+
+### Prerequisites
+
+- Build from this branch (Gemmini plugin refactor enabled).
+- LLVM CPU backend enabled (`-DIREE_TARGET_BACKEND_LLVM_CPU=ON`).
+- RISC-V target triple/toolchain support available in the LLVM build.
+
+### Configure and build
+
+```bash
+cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DIREE_TARGET_BACKEND_LLVM_CPU=ON
+ninja -C build iree-compile
+```
+
+### Compile a Gemmini matmul test
+
+```bash
+./build/tools/iree-compile test_gemmini.mlir \
+    -o /tmp/iree_gemmini_plugin/test_gemmini.vmfb \
+    --iree-hal-target-backends=llvm-cpu \
+    --iree-llvmcpu-target-triple=riscv64-unknown-linux-gnu \
+    --iree-llvmcpu-target-abi=lp64d \
+    --iree-llvmcpu-target-cpu-features=+m,+a,+f,+d,+c,+v,+buddyext \
+    --iree-llvmcpu-enable-gemmini-linalg-lowering \
+    --iree-hal-dump-executable-files-to=/tmp/iree_gemmini_plugin/dump
+```
+
+### Verify Gemmini instruction patterns
+
+```bash
+grep -R -nE 'config_ex|loop_ws|flush' /tmp/iree_gemmini_plugin/dump --include='*.s'
+```
+
+### Spike note
+
+If you run generated binaries on a simulator, ensure your Spike fork/config
+supports the Buddy/Gemmini extension and the same ISA feature set used at
+compile time.
+
+### TODO
+
+- Add pinned known-good commit hashes for buddy-ext/Gemmini toolchain components.
+- Add CI coverage for Gemmini plugin compile and assembly-pattern checks.
+
 [![IREE Discord Status](https://discordapp.com/api/guilds/689900678990135345/widget.png?style=shield)]([https://discord.gg/wEWh6Z9nMU](https://discord.gg/wEWh6Z9nMU))
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8738/badge)](https://www.bestpractices.dev/projects/8738)

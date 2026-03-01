@@ -22,6 +22,7 @@ endif()
 
 if(IREE_TARGET_BACKEND_LLVM_CPU)
   add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/target/LLVMCPU target/LLVMCPU)
+  add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/gemmini gemmini)
 endif()
 
 # NOTE: the local device target is always added as it is needed by any in- or
