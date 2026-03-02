@@ -13,7 +13,6 @@
 #include "iree/compiler/Codegen/Dialect/Codegen/IR/IREECodegenInterfaces.h"
 #include "iree/compiler/Codegen/LLVMCPU/Passes.h"
 #include "iree/compiler/Dialect/LinalgExt/Transforms/Passes.h"
-#include "iree/compiler/ThirdParty/buddy_gemmini/RegisterGemmini.h"
 #include "iree/compiler/Dialect/Util/Transforms/Passes.h"
 #include "iree/compiler/Utils/PassUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -569,10 +568,6 @@ static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
   // Lower `ukernel.*` ops to function calls
   modulePassManager.addPass(createLowerUKernelOpsToCallsPass());
 
-  if (clEnableGemminiLinalgLowering) {
-    modulePassManager.addPass(mlir::buddy::createLowerLinalgToGemminiPass());
-  }
-
   FunctionLikeNest(modulePassManager)
       // LinalgExt -> SCF
       .addPass(IREE::LinalgExt::createLinalgExtToLoopsPass)
@@ -679,9 +674,6 @@ static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
     FunctionLikeNest(modulePassManager).addPass([&] {
       return createConvertArmSMEToLLVMPass();
     });
-  }
-  if (clEnableGemminiLinalgLowering) {
-    modulePassManager.addPass(mlir::buddy::createLowerGemminiPass());
   }
   modulePassManager.addPass(
       createConvertToLLVMPass(clEnableReassociateFpReductions));

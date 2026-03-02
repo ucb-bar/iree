@@ -34,7 +34,6 @@
 #include "iree/compiler/Modules/IO/Parameters/Transforms/Passes.h"
 #include "iree/compiler/Pipelines/Pipelines.h"
 #include "iree/compiler/Preprocessing/Passes.h"
-#include "iree/compiler/ThirdParty/buddy_gemmini/RegisterGemmini.h"
 
 #ifdef IREE_HAVE_C_OUTPUT_FORMAT
 // TODO: Remove these once rolled up into explicit registration.
@@ -70,9 +69,6 @@ inline void registerAllIreePasses() {
   IREE::VM::registerVMAnalysisTestPasses();
   IREE::VMVX::registerVMVXPasses();
   registerIREEVMTransformPassPipeline();
-
-  // Register Gemmini passes.
-  registerGemminiPasses();
 
   // We have some dangling passes that don't use explicit
   // registration and that we need to force instantiation
