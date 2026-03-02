@@ -153,17 +153,25 @@ static Value getUnpromotedInput(Type unpromotedType, Type promotedType,
   if (unpromotedType == promotedType) {
     return promotedResult;
   }
-  // TODO: handle promotion of floating point types. Not doing it for now as
-  // it wouldn't be exercised.
-  auto extSIOp = promotedResult.getDefiningOp<arith::ExtSIOp>();
-  if (!extSIOp) {
-    return nullptr;
+  // 1. Support Integer Sign Extension (for i8 -> i32)
+  if (auto extSIOp = promotedResult.getDefiningOp<arith::ExtSIOp>()) {
+    Value extInput = extSIOp.getIn();
+    if (cast<VectorType>(extInput.getType()).getElementType() == unpromotedType) {
+      return extInput;
+    }
   }
-  Value extInput = extSIOp.getIn();
-  if (cast<VectorType>(extInput.getType()).getElementType() != unpromotedType) {
-    return nullptr;
+
+  // 2. Support Floating Point Extension (for fp8 -> f16)
+  // (This resolves the "TODO" comment from the original IREE developers!)
+  if (auto extFOp = promotedResult.getDefiningOp<arith::ExtFOp>()) {
+    Value extInput = extFOp.getIn();
+    if (cast<VectorType>(extInput.getType()).getElementType() == unpromotedType) {
+      return extInput;
+    }
   }
-  return extInput;
+
+  // If it wasn't an integer extension or a float extension, we can't handle it.
+  return nullptr;
 }
 
 // Helper to create a 1D, contiguous slice of a 1D vector.
@@ -206,7 +214,7 @@ static Value flatten(PatternRewriter &rewriter, Location loc, Value vector) {
 // (2) Be explicit about the size of the vectors involved in the kernel's
 //         "calling convention".
 struct MMTKernel {
-  enum class ScalarType : int8_t { None, I8, I32, F32 };
+  enum class ScalarType : int8_t { None, I8, I32, F32, F16, BF16, F8E4M3FN };
   // Element type of the LHS vectors.
   ScalarType lhsType = ScalarType::None;
   // Element type of the RHS vectors.
@@ -673,6 +681,82 @@ MMTKernel MMTKernel_8x1x1_f32f32f32_Aarch64_Baseline_InlineAsm() {
   return kernel;
 }
 
+// Int8 Kernel (Output 512-bit)
+MMTKernel MMTKernel_SpacemiT_Int8() {
+  MMTKernel kernel;
+  kernel.lhsType = MMTKernel::ScalarType::I8;
+  kernel.rhsType = MMTKernel::ScalarType::I8;
+  kernel.accType = MMTKernel::ScalarType::I32;
+  kernel.m0 = 4; kernel.n0 = 4; kernel.k0 = 8; // MUST BE 8
+  kernel.lhsRegSize = 32; 
+  kernel.rhsRegSize = 32; 
+  kernel.accRegSize = 16; 
+  kernel.lhsRegs = 1;     
+  kernel.rhsRegs = 1;     
+  kernel.accRegs = 1;
+  kernel.asmImpl = nullptr;
+  return kernel;
+}
+
+// FP8 Kernel (Output 256-bit)
+MMTKernel MMTKernel_SpacemiT_FP8() {
+  MMTKernel kernel;
+  kernel.lhsType = MMTKernel::ScalarType::F8E4M3FN; 
+  kernel.rhsType = MMTKernel::ScalarType::F8E4M3FN; 
+  kernel.accType = MMTKernel::ScalarType::F16;
+  kernel.m0 = 4; kernel.n0 = 4; kernel.k0 = 8; // MUST BE 8
+  kernel.lhsRegSize = 32; 
+  kernel.rhsRegSize = 32; 
+  kernel.accRegSize = 16; 
+  kernel.lhsRegs = 1;
+  kernel.rhsRegs = 1;
+  kernel.accRegs = 1;
+  kernel.asmImpl = nullptr;
+  return kernel;
+}
+
+// Standard RVV i8*i8->i32 widening kernel.
+//
+// Primary shape: MxNxK = 8x16x1.
+MMTKernel MMTKernel_RVV_8x16x1_Int8() {
+  MMTKernel kernel;
+  kernel.lhsType = MMTKernel::ScalarType::I8;
+  kernel.rhsType = MMTKernel::ScalarType::I8;
+  kernel.accType = MMTKernel::ScalarType::I32;
+  kernel.m0 = 8;
+  kernel.n0 = 16;
+  kernel.k0 = 1;
+  kernel.lhsRegSize = 8;
+  kernel.rhsRegSize = 16;
+  kernel.accRegSize = 16;
+  kernel.lhsRegs = 1;
+  kernel.rhsRegs = 1;
+  kernel.accRegs = 8;
+  kernel.asmImpl = nullptr;
+  return kernel;
+}
+
+// Standard RVV i8*i8->i32 widening kernel.
+//
+// Secondary shape: MxNxK = 7x16x1.
+MMTKernel MMTKernel_RVV_7x16x1_Int8() {
+  MMTKernel kernel;
+  kernel.lhsType = MMTKernel::ScalarType::I8;
+  kernel.rhsType = MMTKernel::ScalarType::I8;
+  kernel.accType = MMTKernel::ScalarType::I32;
+  kernel.m0 = 7;
+  kernel.n0 = 16;
+  kernel.k0 = 1;
+  kernel.lhsRegSize = 7;
+  kernel.rhsRegSize = 16;
+  kernel.accRegSize = 16;
+  kernel.lhsRegs = 1;
+  kernel.rhsRegs = 1;
+  kernel.accRegs = 7;
+  kernel.asmImpl = nullptr;
+  return kernel;
+}
+
 // Constructs the mlir::Type corresponding to a scalar type.
 Type mlirType(MLIRContext *context, MMTKernel::ScalarType t) {
   switch (t) {
@@ -684,6 +768,12 @@ Type mlirType(MLIRContext *context, MMTKernel::ScalarType t) {
     return IntegerType::get(context, 32, IntegerType::Signless);
   case MMTKernel::ScalarType::F32:
     return Float32Type::get(context);
+  case MMTKernel::ScalarType::F16:
+    return Float16Type::get(context);
+  case MMTKernel::ScalarType::BF16:
+    return BFloat16Type::get(context);
+  case MMTKernel::ScalarType::F8E4M3FN:
+    return Float8E4M3FNType::get(context);
   }
   assert(false);
   return Type();
@@ -703,6 +793,12 @@ public:
                               ArrayRef<Value> lhs, ArrayRef<Value> rhs,
                               ArrayRef<Value> acc) {
     validateOperands(lhs, rhs, acc);
+    if (isSpacemiT(target)) {
+      return generateSpacemiT(rewriter, loc, lhs, rhs, acc);
+    }
+    if (isRVVStandardInt8Kernel()) {
+      return generateRVVStandardIntrinsics(rewriter, loc, lhs, rhs, acc);
+    }
     if (kernel.asmImpl) {
       return generateAsm(rewriter, loc, lhs, rhs, acc);
     }
@@ -735,6 +831,186 @@ private:
   MLIRContext *const context;
   const MMTKernel kernel;
   const IREE::HAL::ExecutableTargetAttr target;
+
+  bool isSpacemiT(IREE::HAL::ExecutableTargetAttr target) {
+    if (!target) return false;
+    return hasFeature(target.getConfiguration(), "+xsmtvdot");
+  }
+
+  bool isRVVStandardInt8Kernel() const {
+    if (!target) {
+      return false;
+    }
+    DictionaryAttr targetConfig = target.getConfiguration();
+    if (!isRISCV(targetConfig) || !hasFeature(targetConfig, "+v") ||
+        hasFeature(targetConfig, "+xsmtvdot")) {
+      return false;
+    }
+    return kernel.lhsType == MMTKernel::ScalarType::I8 &&
+           kernel.rhsType == MMTKernel::ScalarType::I8 &&
+           kernel.accType == MMTKernel::ScalarType::I32 && kernel.k0 == 1 &&
+           kernel.lhsRegs == 1 && kernel.rhsRegs == 1 &&
+           kernel.lhsRegSize == kernel.m0 && kernel.rhsRegSize == kernel.n0 &&
+           kernel.accRegSize == kernel.n0 && kernel.accRegs == kernel.m0;
+  }
+
+  // Helper: Cast Fixed -> Scalable using @llvm.vector.insert intrinsic
+  // This avoids stack bouncing by using the backend's native subvector insertion.
+  Value castFixedToScalable(PatternRewriter &rewriter, Location loc, 
+                            Value fixedVec, VectorType scalableType) {
+    Value undef = rewriter.create<LLVM::UndefOp>(loc, scalableType);
+    StringRef intrName = "llvm.vector.insert";
+    Value zero = rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(0));
+
+    // FIX: Pass scalableType directly (not TypeRange) and wrap string in StringAttr
+    auto callOp = rewriter.create<LLVM::CallIntrinsicOp>(
+        loc, 
+        scalableType,                     // Unwrapped Type
+        rewriter.getStringAttr(intrName), // Wrapped String
+        ValueRange{undef, fixedVec, zero}
+    );
+    
+    return callOp.getResult(0);
+  }
+
+  // Helper: Cast Scalable -> Fixed using @llvm.vector.extract intrinsic
+  Value castScalableToFixed(PatternRewriter &rewriter, Location loc, 
+                            Value scalableVec, VectorType fixedType) {
+    StringRef intrName = "llvm.vector.extract";
+    Value zero = rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(0));
+
+    // FIX: Pass fixedType directly (not TypeRange) and wrap string in StringAttr
+    auto callOp = rewriter.create<LLVM::CallIntrinsicOp>(
+        loc, 
+        fixedType,                        // Unwrapped Type
+        rewriter.getStringAttr(intrName), // Wrapped String
+        ValueRange{scalableVec, zero}
+    );
+    return callOp.getResult(0);
+  }
+
+  SmallVector<Value> generateSpacemiT(PatternRewriter &rewriter, Location loc,
+                                      ArrayRef<Value> lhs, ArrayRef<Value> rhs,
+                                      ArrayRef<Value> acc) {
+    // 1. Detect if this is an FP8/FP16 kernel
+    Type accElemType = getElementTypeOrSelf(acc[0].getType());
+    bool isFloat = isa<FloatType>(accElemType);
+    
+    VectorType scalableInputType;
+    VectorType scalableAccType;
+    StringRef intrName;
+    int vlVal;
+
+    // VLEN=256 Logic
+    if (isFloat) {
+        // --- FP8/FP16 Path ---
+        scalableAccType = VectorType::get({4}, rewriter.getF16Type(), {true});
+        intrName = "llvm.riscv.smt.vfmadot";
+        scalableInputType = VectorType::get({8}, rewriter.getIntegerType(8), {true});
+        vlVal = 16;
+    } else {
+        // --- Integer Path ---
+        scalableAccType = VectorType::get({4}, rewriter.getIntegerType(32), {true});
+        intrName = "llvm.riscv.smt.vmadot";
+        scalableInputType = VectorType::get({8}, rewriter.getIntegerType(8), {true});
+        vlVal = 16;  
+    }
+
+    // 2. Prepare Inputs (Bitcast F8 -> I8 if needed for the intrinsic)
+    Value lhsVal = lhs[0];
+    Value rhsVal = rhs[0];
+    Value accVal = acc[0];
+
+    // If inputs are F8, we bitcast them to I8 *Fixed* vectors first to match 
+    // the bitwidth expected by the castFixedToScalable helper which expects bits to match.
+    if (isFloat) {
+       auto i8FixedType = VectorType::get(cast<VectorType>(lhsVal.getType()).getShape(), 
+                                          rewriter.getIntegerType(8));
+       if (lhsVal.getType() != i8FixedType) {
+           lhsVal = rewriter.create<LLVM::BitcastOp>(loc, i8FixedType, lhsVal);
+           rhsVal = rewriter.create<LLVM::BitcastOp>(loc, i8FixedType, rhsVal);
+       }
+    }
+
+    // 3. Cast to Scalable (No Stack Bounce)
+    Value lhsScalable = castFixedToScalable(rewriter, loc, lhsVal, scalableInputType);
+    Value rhsScalable = castFixedToScalable(rewriter, loc, rhsVal, scalableInputType);
+    
+    // Accumulator handling
+    // For FP16 accumulator, standard vector types match.
+    // For Int32 accumulator, standard types match.
+    Value accScalable = castFixedToScalable(rewriter, loc, accVal, scalableAccType);
+
+    // 4. Set VL
+    Value vl = rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(vlVal));
+
+    // 5. Call SpacemiT Intrinsic
+    // FIX: Pass scalableAccType directly (not TypeRange) and wrap string in StringAttr
+    auto callOp = rewriter.create<LLVM::CallIntrinsicOp>(
+        loc, 
+        scalableAccType,                  // Unwrapped Type
+        rewriter.getStringAttr(intrName), // Wrapped String
+        ValueRange{accScalable, lhsScalable, rhsScalable, vl}
+    );
+
+    // 6. Extract Result
+    Value resFixed = castScalableToFixed(rewriter, loc, callOp.getResult(0), cast<VectorType>(accVal.getType()));
+
+    return {resFixed};
+  }
+
+  SmallVector<Value> generateRVVStandardIntrinsics(PatternRewriter &rewriter,
+                                                   Location loc,
+                                                   ArrayRef<Value> lhs,
+                                                   ArrayRef<Value> rhs,
+                                                   ArrayRef<Value> acc) {
+    // Fixed-length vectors are represented as scalable vectors for RVV
+    // intrinsics. On X60 (VLEN=256), vscale is 4, so scalable count = N/4.
+    assert(kernel.n0 % 4 == 0 &&
+           "Expected N to be divisible by 4 on VLEN=256 target");
+    int64_t scalableCount = kernel.n0 / 4;
+    VectorType scalableI8 = VectorType::get({scalableCount},
+                                            rewriter.getIntegerType(8),
+                                            {true});
+    VectorType scalableI16 = VectorType::get({scalableCount},
+                                             rewriter.getIntegerType(16),
+                                             {true});
+    VectorType scalableI32 = VectorType::get({scalableCount},
+                                             rewriter.getIntegerType(32),
+                                             {true});
+
+    Value rhsScalable = castFixedToScalable(rewriter, loc, rhs[0], scalableI8);
+    Value vl = rewriter.create<LLVM::ConstantOp>(loc, rewriter.getI64Type(),
+                                                 rewriter.getI64IntegerAttr(kernel.n0));
+
+    SmallVector<Value> widenedProducts;
+    widenedProducts.reserve(kernel.m0);
+
+    // Emit all widening multiplies first (vwmul.vx), then widening adds
+    // (vwadd.wv). This minimizes vtype switching and allows better scheduling.
+    for (int64_t i = 0; i < kernel.m0; ++i) {
+      Value lhsScalar = extract(rewriter, loc, lhs[0], i);
+      Value passthru = rewriter.create<LLVM::UndefOp>(loc, scalableI16);
+      auto mulOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          loc, scalableI16, rewriter.getStringAttr("llvm.riscv.vwmul"),
+          ValueRange{passthru, rhsScalable, lhsScalar, vl});
+      widenedProducts.push_back(mulOp.getResult(0));
+    }
+
+    SmallVector<Value> results;
+    results.reserve(kernel.m0);
+    for (int64_t i = 0; i < kernel.m0; ++i) {
+      Value accScalable =
+          castFixedToScalable(rewriter, loc, acc[i], scalableI32);
+      auto addOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          loc, scalableI32, rewriter.getStringAttr("llvm.riscv.vwadd.w"),
+          ValueRange{accScalable, accScalable, widenedProducts[i], vl});
+      Value resultFixed = castScalableToFixed(
+          rewriter, loc, addOp.getResult(0), cast<VectorType>(acc[i].getType()));
+      results.push_back(resultFixed);
+    }
+    return results;
+  }
 
   // Helper for generate(). Asserts sanity of the vector-of-register-vectors.
   void validateOperands(ArrayRef<Value> lhs, ArrayRef<Value> rhs,
@@ -1147,6 +1423,18 @@ void populateVectorContractCustomKernelsPatterns(
     return;
   }
   DictionaryAttr targetConfig = target.getConfiguration();
+  if (isRISCV(targetConfig)) {
+    // Keep vendor extension kernels and standard RVV kernels disjoint.
+    if (hasFeature(targetConfig, "+xsmtvdot")) {
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_SpacemiT_Int8());
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_SpacemiT_FP8());
+    } else if (hasFeature(targetConfig, "+v")) {
+      patterns.add<MMTCustomKernelPattern>(context,
+                                           MMTKernel_RVV_8x16x1_Int8());
+      patterns.add<MMTCustomKernelPattern>(context,
+                                           MMTKernel_RVV_7x16x1_Int8());
+    }
+  }
   if (isAArch64(targetConfig)) {
     // TODO: add a "kernel benefit" system whereby if two kernels are available
     // for the same shape and same data types, the fastest one (ie the one
