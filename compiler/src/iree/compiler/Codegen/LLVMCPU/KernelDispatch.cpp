@@ -1566,33 +1566,81 @@ static void getMatmulVectorSizesUsingFullVectorHeuristics(
   sizes[1] = std::max(sizes[1], minNumElements);
 }
 
+static bool getMatmulSpacemiTVectorSizes(
+    mlir::FunctionOpInterface entryPointFn, linalg::LinalgOp op,
+    SmallVectorImpl<int64_t> &sizes) {
+  auto targetAttr = IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn);
+  if (!targetAttr) return false;
+  DictionaryAttr config = targetAttr.getConfiguration();
+  if (isRISCV(config) && hasFeature(config, "+xsmtvdot")) {
+    sizes.assign({4, 4, 8});
+    return true;
+  }
+  return false;
+}
+
+
 /// Utility to compute the tile sizes for RISC-V Vector.
-/// For now, it only supports nonWideningLinalgElementType float.
-/// TileSize is set to m = 7, n = maxNumberElementsForLMUL4, and k = 1.
-///
-/// Example: for an pure f32-matmul and a 512-bit vector register.
-/// nativeVectorSize is equal to VLEN * LMUL2 / 8, so it's 128.
-/// maxNumberElementsForLMUL4 = 128 * 2 * 8 / 32 = 64.
-///
-/// TODO: Currently it only supports for nonWideningLinalgElementType.
+/// Supports both non-widening float matmul and widening int matmul (i8 -> i32).
 static void
 getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
                           linalg::LinalgOp op, int64_t vectorSize,
                           SmallVectorImpl<int64_t> &sizes,
                           SmallVectorImpl<bool> &scalableSizeFlags) {
-  if (sizes.empty()) {
-    getDefaultMatmulVectorSizes(op, vectorSize, sizes, scalableSizeFlags);
+  if (!sizes.empty()) {
+    return;
   }
-  // TODO: support widening matmul.
-  // Determines n dimension tile size with VLEN for
-  // nonWideningLinalgElementType.
+  // Preserve dedicated SpacemiT dot-product path.
+  if (getMatmulSpacemiTVectorSizes(entryPointFn, op, sizes)) {
+    return;
+  }
+
+  Type lhsType = getElementTypeOrSelf(op.getDpsInputOperand(0)->get().getType());
+  Type rhsType = getElementTypeOrSelf(op.getDpsInputOperand(1)->get().getType());
+  Type outType = getElementTypeOrSelf(op.getDpsInitOperand(0)->get().getType());
+  
+  bool isWideningI8ToI32 =
+      lhsType.isSignlessInteger(8) && rhsType.isSignlessInteger(8) &&
+      outType.isSignlessInteger(32);
+
+  FailureOr<linalg::ContractionDimensions> cDims =
+      linalg::inferContractionDims(op);
+  if (failed(cDims) || cDims->m.size() != 1) {
+    return;
+  }
+
+  int64_t nativeVectorSize = getNativeVectorSizeInBytes(entryPointFn);
+
+  if (isWideningI8ToI32) {
+    // Widening integer path (i8, i8 -> i32):
+    constexpr int64_t kByteSizeInBits = 8;
+    constexpr int64_t kAccumulatorBitWidth = 32;
+    
+    // Target LMUL2 to keep register pressure lower and allow wider M unroll.
+    constexpr int64_t targetLMUL = 2; 
+
+    // Calculate N from LMUL target.
+    // (32 bytes * 8 bits * 2 LMUL) / 32 bits = 16 elements on VLEN=256.
+    int64_t nSize =
+        (nativeVectorSize * kByteSizeInBits * targetLMUL) / kAccumulatorBitWidth;
+    
+    // M=8, N=16, K=1
+    sizes.append({8, nSize, 1});
+
+    ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
+    // Matrix-vector optimization (M=1)
+    if (lhsShape[cDims->m[0]] == 1) {
+      sizes[0] = 1;
+      sizes[1] *= 2; // Use LMUL8 or loop unrolling for single row
+    }
+    return;
+  }
+
+  // --- Keep Existing Float Behavior ---
   FailureOr<Type> elementType = nonWideningLinalgElementType(op);
   if (failed(elementType)) {
     return;
   }
-
-  // nativeVectorSize is cacluated with VLEN and LMUL=2.
-  int64_t nativeVectorSize = getNativeVectorSizeInBytes(entryPointFn);
   int64_t elementSize;
   if (elementType->isF16()) {
     elementSize = 16;
@@ -1601,22 +1649,18 @@ getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
   } else if (elementType->isF64()) {
     elementSize = 64;
   } else {
-    // TODO: support int data type
     return;
   }
-  FailureOr<linalg::ContractionDimensions> cDims =
-      linalg::inferContractionDims(op);
-  if (failed(cDims) || cDims->m.size() != 1) {
-    return;
-  }
-  // Use 7 x lmul4 to fully utilize vector registers.
-  sizes[0] = 7;
+
+  // Use 6 x lmul4 to prevent spills (Original was 7, 6 is safer on X60)
+  sizes.push_back(6);
   // Calculate tile size for the main vector dimension (N).
   constexpr int64_t kByteSizeInBits = 8;
   int64_t maxNumberElementsForLMUL4 =
       (nativeVectorSize * 2 * kByteSizeInBits) / elementSize;
-  sizes[1] = maxNumberElementsForLMUL4;
-  sizes[2] = 1;
+  sizes.push_back(maxNumberElementsForLMUL4);
+  sizes.push_back(1);
+
   ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
   // If m = 1, set tile size to 1 x lmul8
   if (lhsShape[cDims->m[0]] == 1) {
@@ -2508,6 +2552,35 @@ setDefaultGenericOpRootConfig(mlir::FunctionOpInterface entryPointFn,
                                                  linalgOpInfo,
                                                  targetMLTransInfo),
                      distConfig.maxTileSizes, vecPreProcStrategy, vecTileSizes);
+
+  // If we detect SpacemiT hardware, force 4x4 tiling on the innermost PARALLEL loops.
+  auto targetAttr = IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn);
+  if (targetAttr) {
+      DictionaryAttr targetConfig = targetAttr.getConfiguration();
+      if (isRISCV(targetConfig) && hasFeature(targetConfig, "+xsmtvdot")) {
+          if (genericOp.getNumReductionLoops() > 0) {
+              int parallelCount = 0;
+              bool foundReduction = false;
+
+              // Iterate backwards to shape the tile
+              for (int i = vecTileSizes.size() - 1; i >= 0; --i) {
+                  auto iterType = genericOp.getIteratorTypesArray()[i];
+
+                  // Force innermost PARALLEL loops to 4 (M and N)
+                  if (iterType == utils::IteratorType::parallel && parallelCount < 2) {
+                      vecTileSizes[i] = 4;
+                      parallelCount++;
+                  }
+                  // Force innermost REDUCTION loop to 8 (K)
+                  else if (iterType == utils::IteratorType::reduction && !foundReduction) {
+                      vecTileSizes[i] = 8;
+                      foundReduction = true;
+                  }
+              }
+          }
+      }
+  }
+
   limitVectorTileSizes(genericOp, vecTileSizes);
 
   LoweringConfigGenerator generator(genericOp);
@@ -2935,6 +3008,9 @@ getNhwcConvVectorSizes(mlir::FunctionOpInterface entryPointFn,
     }
     if (isRISCV(targetConfig)) {
       if (is2DConvOp(op)) {
+        if (hasFeature(targetConfig, "+xsmtvdot")) {
+          return {1, 1, 4, 4, 1, 1, 8};
+        }
         return {1, 1, 8, vectorSize * 2, 1, 1, 8};
       }
       if (is2DDepthConvOp(op)) {
