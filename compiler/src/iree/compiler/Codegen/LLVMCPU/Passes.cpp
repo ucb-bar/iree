@@ -568,6 +568,10 @@ static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
   // Lower `ukernel.*` ops to function calls
   modulePassManager.addPass(createLowerUKernelOpsToCallsPass());
 
+  if (clEnableGemminiLinalgLowering) {
+    (void)parsePassPipeline("convert-linalg-to-gemmini", modulePassManager);
+  }
+
   FunctionLikeNest(modulePassManager)
       // LinalgExt -> SCF
       .addPass(IREE::LinalgExt::createLinalgExtToLoopsPass)
@@ -674,6 +678,9 @@ static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
     FunctionLikeNest(modulePassManager).addPass([&] {
       return createConvertArmSMEToLLVMPass();
     });
+  }
+  if (clEnableGemminiLinalgLowering) {
+    (void)parsePassPipeline("lower-gemmini", modulePassManager);
   }
   modulePassManager.addPass(
       createConvertToLLVMPass(clEnableReassociateFpReductions));
