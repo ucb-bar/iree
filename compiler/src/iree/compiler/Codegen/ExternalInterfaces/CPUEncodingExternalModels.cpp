@@ -422,7 +422,6 @@ size_t getRISCVVVlenFromCPUFeatures(DictionaryAttr config) {
 // are handled by transposition in chooseMatmulTile.
 static SmallVector<TileMxNxK>
 enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
-
   // Data-Tiling is only implemented for the V extension
   if (!hasFeature(config, "+v")) {
     return {};
@@ -432,11 +431,12 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
   Type lhs = elementTypes[0];
   Type rhs = elementTypes[1];
   Type out = elementTypes[2];
+
+  // VLEN-aware Tile size selection.
+  // One concern that needs to be addressed here is that
+  // for larger VLENs tile sizes would be very large
+  // leading to a very high padding overhead.
   if (lhs.isF32() && rhs.isF32() && out.isF32()) {
-    // VLEN-aware Tile size selection
-    // One concern that needs to be addressed here is that
-    // for larger VLENs tile sizes would be very large
-    // leading to a very high padding overhead
     int N0 = vlen / 8;
     return {
         TileMxNxK{7, N0, 1}, // Aim to use vfmacc, 100% register utilization.
@@ -462,6 +462,37 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
       };
     }
   }
+
+  // Integer 8 path.
+  if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
+      out.isSignlessInteger(32)) {
+    if (hasFeature(config, "+xsmtvdot")) {
+      // SpacemiT vmadot: fixed 4x4x8 blocks.
+      return {
+          TileMxNxK{4, 4, 8},
+          TileMxNxK{2, 4, 8},
+          TileMxNxK{1, 4, 8},
+      };
+    }
+
+    // Standard RVV path:
+    // N0 calculation:
+    // vlen (bits) / 32 (bits per element) = elements per register (LMUL1)
+    // We target LMUL2 here (N0=16 on VLEN=256) to reduce accumulator pressure
+    // and allow deeper M unrolling.
+    int elementsPerReg = vlen / 32;
+    int N0 = elementsPerReg * 2; // Target LMUL=2 (e.g., 16 elements)
+
+    return {
+        // Prefer wider M when possible; chooseMatmulTile will pick the best fit.
+        TileMxNxK{8, N0, 1},
+        TileMxNxK{7, N0, 1},
+        TileMxNxK{4, N0, 1},
+        TileMxNxK{2, N0, 1},
+        TileMxNxK{1, N0, 1},
+    };
+  }
+
   // Fallback - no architecture-optimized tile size for this case.
   return {};
 }
