@@ -322,6 +322,42 @@ def ScheduleExecutionPass :
   ];
 }
 
+def SplitExecuteRegionsPass :
+    InterfacePass<"iree-stream-split-execute-regions", "mlir::CallableOpInterface"> {
+  let summary = "Splits multi-dispatch async execute regions into one-dispatch-per-region.";
+  let description = [{
+    Splits `stream.async.execute` regions that contain multiple
+    `stream.async.dispatch` operations into separate execute regions, each
+    containing exactly one dispatch. The resulting regions are chained with
+    `!stream.timepoint` dependencies that preserve the original execution order.
+
+    This is intended for use when external orchestration of individual
+    dispatches is required, such as interleaving dispatches from multiple
+    models on heterogeneous hardware. It runs after `ScheduleExecution`
+    (which groups work) to undo that grouping at a finer granularity.
+
+    Before:
+      %results, %tp = stream.async.execute {
+        %d0 = stream.async.dispatch @dispatch_0(...)
+        %d1 = stream.async.dispatch @dispatch_1(%d0, ...)
+        stream.yield %d1
+      }
+
+    After:
+      %r0, %tp0 = stream.async.execute {
+        %d0 = stream.async.dispatch @dispatch_0(...)
+        stream.yield %d0
+      }
+      %r1, %tp1 = stream.async.execute await(%tp0) {
+        %d1 = stream.async.dispatch @dispatch_1(%r0, ...)
+        stream.yield %d1
+      }
+  }];
+  let dependentDialects = [
+    "IREE::Stream::StreamDialect",
+  ];
+}
+
 def ScheduleConcurrencyPass :
     InterfacePass<"iree-stream-schedule-concurrency", "mlir::CallableOpInterface"> {
   let summary = "Identifies and groups asynchronous operations within executable regions that can run concurrently and groups them into streams.";

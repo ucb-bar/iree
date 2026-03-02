@@ -50,6 +50,7 @@ iree_cc_library(
     "SpecializeDispatches.cpp"
     "SpecializeEncodings.cpp"
     "SplitParameterEncoder.cpp"
+    "SplitExecuteRegions.cpp"
     "SyncInitializers.cpp"
     "UnifyEncodingForGlobals.cpp"
     "Utils.cpp"

@@ -28,6 +28,12 @@ static llvm::cl::opt<bool> clUnifyEncodingForGlobals(
                    "reduce memory. It is an experimental flag for data-tiling"),
     llvm::cl::init(false));
 
+static llvm::cl::opt<bool> clSplitExecuteRegions(
+    "iree-stream-enable-split-execute-regions",
+    llvm::cl::desc("Splits multi-dispatch async execute regions into "
+                   "one-dispatch-per-region for external orchestration."),
+    llvm::cl::init(false));
+
 namespace mlir::iree_compiler::IREE::Stream {
 
 using FunctionLikeNest =
@@ -293,6 +299,13 @@ void buildStreamAsyncPassPipeline(OpPassManager &passManager,
       .addPass(IREE::Stream::createScheduleExecutionPass)
       // Group concurrently executable work into waves.
       .addPass(IREE::Stream::createScheduleConcurrencyPass);
+
+  // When requested, split merged execute regions back into
+  // one-dispatch-per-region for external orchestration.
+  if (clSplitExecuteRegions) {
+    FunctionLikeNest(passManager)
+        .addPass(IREE::Stream::createSplitExecuteRegionsPass);
+  }
 
   // When synchronous initialization is requested we need to separate any work
   // behind a timepoint in the initializer from the consumers of that timepoint.
