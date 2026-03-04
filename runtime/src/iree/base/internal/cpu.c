@@ -381,6 +381,7 @@ static void iree_cpu_initialize_from_platform_x86_64(uint64_t* out_fields) {
 #include <sched.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <sys/auxv.h>
 #ifdef __has_include
 #if __has_include(<asm/hwprobe.h>)
 #include <asm/hwprobe.h>
@@ -418,17 +419,27 @@ long riscv_hwprobe(struct riscv_hwprobe* pairs, size_t pair_count,
 
 static void iree_cpu_initialize_from_platform_riscv_64(uint64_t* out_fields) {
   long rc = riscv_hwprobe(&kv_pairs[0], 1, 0, NULL, 0);
-  if (rc != 0) {
-    fprintf(stderr, "riscv_hwprobe syscall failed");
-    exit(1);
+  if (rc == 0) {
+    unsigned long long hwprobe = kv_pairs[0].value;
+    IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_V, hwprobe,
+                  IREE_RISCV_HWPROBE_IMA_V);
+    IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_ZVFHMIN, hwprobe,
+                  IREE_RISCV_HWPROBE_EXT_ZVFHMIN);
+    IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_ZVFH, hwprobe,
+                  IREE_RISCV_HWPROBE_EXT_ZVFH);
+    return;
   }
-  unsigned long long hwprobe = kv_pairs[0].value;
-  IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_V, hwprobe,
-                 IREE_RISCV_HWPROBE_IMA_V);
-  IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_ZVFHMIN, hwprobe,
-                 IREE_RISCV_HWPROBE_EXT_ZVFHMIN);
-  IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_ZVFH, hwprobe,
-                 IREE_RISCV_HWPROBE_EXT_ZVFH);
+  
+
+  unsigned long hwcap = getauxval(AT_HWCAP);
+  if (hwcap != 0) {
+    unsigned long hwcap_v = (1 << ('V' - 'A'));
+    IREE_COPY_BITS(out_fields[0], IREE_CPU_DATA0_RISCV_64_V, hwcap, hwcap_v);
+    return;
+  }
+  
+  fprintf(stderr, "riscv_hwprobe syscall failed");
+  fprintf(stderr, "Unified RISC-V CPU probe failed (no hwprobe, no HWCAP).\n");
 }
 
 #else
