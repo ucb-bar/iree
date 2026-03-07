@@ -757,6 +757,37 @@ MMTKernel MMTKernel_RVV_7x16x1_Int8() {
   return kernel;
 }
 
+MMTKernel MMTKernel_OPU_Int8(int64_t m0, int64_t n0) {
+  MMTKernel kernel;
+  kernel.lhsType = MMTKernel::ScalarType::I8;
+  kernel.rhsType = MMTKernel::ScalarType::I8;
+  kernel.accType = MMTKernel::ScalarType::I32;
+
+  assert(m0 > 0 && n0 > 0);
+  assert(m0 <= 127 && n0 <= 127 &&
+         "MMTKernel shape fields are int8_t; widen them if targeting very large VLEN");
+
+  kernel.m0 = static_cast<int8_t>(m0);
+  kernel.n0 = static_cast<int8_t>(n0);
+  kernel.k0 = 1;
+
+  // Calling convention used by MMTCustomKernelPattern slicing:
+  // lhs: one vector<m0 x i8>
+  // rhs: one vector<n0 x i8>
+  // acc: m0 row-vectors, each vector<n0 x i32>
+  kernel.lhsRegSize = static_cast<int8_t>(m0);
+  kernel.rhsRegSize = static_cast<int8_t>(n0);
+  kernel.accRegSize = static_cast<int8_t>(n0);
+
+  kernel.lhsRegs = 1;
+  kernel.rhsRegs = 1;
+  kernel.accRegs = static_cast<int8_t>(m0);
+
+  kernel.asmImpl = nullptr;
+  kernel.asmClobbers = nullptr;
+  return kernel;
+}
+
 // Constructs the mlir::Type corresponding to a scalar type.
 Type mlirType(MLIRContext *context, MMTKernel::ScalarType t) {
   switch (t) {
@@ -793,6 +824,9 @@ public:
                               ArrayRef<Value> lhs, ArrayRef<Value> rhs,
                               ArrayRef<Value> acc) {
     validateOperands(lhs, rhs, acc);
+    if (isOPU(target)) {
+      return generateOPU(rewriter, loc, lhs, rhs, acc);
+    }
     if (isSpacemiT(target)) {
       return generateSpacemiT(rewriter, loc, lhs, rhs, acc);
     }
@@ -832,18 +866,35 @@ private:
   const MMTKernel kernel;
   const IREE::HAL::ExecutableTargetAttr target;
 
+    // Returns LLVM "vscale" for the current target.
+  // For RVV, vscale == VLEN / 64. We derive VLEN from IREE's native_vector_size
+  // (bytes). If not present, assume VLEN=128b => vscale=2.
+  int64_t getRISCVVScale() const {
+    if (!target) return 2;
+    std::optional<int64_t> nativeBytes =
+        getConfigNativeVectorSize(target.getConfiguration());
+    int64_t bytes = nativeBytes.value_or(16);  // default 128b
+    int64_t vlenBits = bytes * 8;
+    int64_t vscale = vlenBits / 64;
+    return std::max<int64_t>(1, vscale);
+  }
+
   bool isSpacemiT(IREE::HAL::ExecutableTargetAttr target) {
     if (!target) return false;
     return hasFeature(target.getConfiguration(), "+xsmtvdot");
   }
-
+  bool isOPU(IREE::HAL::ExecutableTargetAttr target) const {
+    if (!target) return false;
+    DictionaryAttr cfg = target.getConfiguration();
+    return isRISCV(cfg) && hasFeature(cfg, "+xopu");
+  }
   bool isRVVStandardInt8Kernel() const {
     if (!target) {
       return false;
     }
     DictionaryAttr targetConfig = target.getConfiguration();
     if (!isRISCV(targetConfig) || !hasFeature(targetConfig, "+v") ||
-        hasFeature(targetConfig, "+xsmtvdot")) {
+        hasFeature(targetConfig, "+xsmtvdot") || hasFeature(targetConfig, "+xopu")) {
       return false;
     }
     return kernel.lhsType == MMTKernel::ScalarType::I8 &&
@@ -887,6 +938,109 @@ private:
         ValueRange{scalableVec, zero}
     );
     return callOp.getResult(0);
+  }
+
+  SmallVector<Value> generateOPU(PatternRewriter &rewriter, Location loc,
+                                ArrayRef<Value> lhs, ArrayRef<Value> rhs,
+                                ArrayRef<Value> acc) {
+    // OPU path: int8 x int8 -> int32 outer-product style.
+    assert(kernel.lhsType == MMTKernel::ScalarType::I8);
+    assert(kernel.rhsType == MMTKernel::ScalarType::I8);
+    assert(kernel.accType == MMTKernel::ScalarType::I32);
+    assert(kernel.k0 == 1);
+
+    assert(kernel.lhsRegs == 1 && kernel.rhsRegs == 1);
+    assert(static_cast<int64_t>(lhs.size()) == kernel.lhsRegs);
+    assert(static_cast<int64_t>(rhs.size()) == kernel.rhsRegs);
+
+    // Accumulator is carried row-wise: one vector<n0xi32> per row.
+    assert(kernel.accRegs == kernel.m0);
+    assert(static_cast<int64_t>(acc.size()) == kernel.accRegs);
+
+    const int64_t mlElems = kernel.lhsRegSize;
+    const int64_t vlElems = kernel.rhsRegSize;
+    assert(kernel.accRegSize == vlElems);
+
+    Type i8 = rewriter.getIntegerType(8);
+    Type i32 = rewriter.getIntegerType(32);
+    Type i64 = rewriter.getI64Type();
+
+    const int64_t vscale = getRISCVVScale();
+    assert((mlElems % vscale) == 0 &&
+          "OPU lhs tile size must be divisible by vscale");
+    assert((vlElems % vscale) == 0 &&
+          "OPU rhs/acc tile size must be divisible by vscale");
+
+    const int64_t lhsScalableCount = mlElems / vscale;
+    const int64_t rowScalableCount = vlElems / vscale;
+
+    VectorType scalableLhsI8 =
+        VectorType::get({lhsScalableCount}, i8, {true});
+    VectorType scalableRhsI8 =
+        VectorType::get({rowScalableCount}, i8, {true});
+    VectorType scalableRowI32 =
+        VectorType::get({rowScalableCount}, i32, {true});
+
+    Value vl = rewriter.create<LLVM::ConstantOp>(
+        loc, i64, rewriter.getI64IntegerAttr(vlElems));
+
+    Value lhsScalable =
+        castFixedToScalable(rewriter, loc, lhs[0], scalableLhsI8);
+    Value rhsScalable =
+        castFixedToScalable(rewriter, loc, rhs[0], scalableRhsI8);
+
+    // Start from zero and initialize the implicit OPM0 state.
+    Value zeroFixed = arith::ConstantOp::create(
+        rewriter, loc,
+        DenseIntElementsAttr::get(cast<VectorType>(acc[0].getType()), 0));
+    Value zeroRowScalable =
+        castFixedToScalable(rewriter, loc, zeroFixed, scalableRowI32);
+
+    rewriter.create<LLVM::CallIntrinsicOp>(
+      loc,
+      rewriter.getStringAttr("llvm.riscv.opu.bcast"),
+      ValueRange{zeroRowScalable, vl});
+
+    // Load incoming accumulator rows into implicit OPM0.
+    for (int64_t r = 0; r < kernel.m0; ++r) {
+      Value rowIdx = rewriter.create<LLVM::ConstantOp>(
+          loc, i64, rewriter.getI64IntegerAttr(r));
+      Value rowScalable =
+          castFixedToScalable(rewriter, loc, acc[r], scalableRowI32);
+
+      rewriter.create<LLVM::CallIntrinsicOp>(
+        loc,
+        rewriter.getStringAttr("llvm.riscv.opu.vmv.rv"),
+        ValueRange{rowIdx, rowScalable, vl});
+    }
+
+    // Accumulate into implicit OPM0.
+    rewriter.create<LLVM::CallIntrinsicOp>(
+        loc,
+        rewriter.getStringAttr("llvm.riscv.opu.vopacc"),
+        ValueRange{lhsScalable, rhsScalable, vl});
+
+    SmallVector<Value> results;
+    results.reserve(kernel.m0);
+    for (int64_t r = 0; r < kernel.m0; ++r) {
+      Value rowIdx = rewriter.create<LLVM::ConstantOp>(
+          loc, i64, rewriter.getI64IntegerAttr(r));
+
+      Value rowScalable =
+          rewriter
+              .create<LLVM::CallIntrinsicOp>(
+                  loc, scalableRowI32,
+                  rewriter.getStringAttr("llvm.riscv.opu.vmv.vr"),
+                  ValueRange{rowIdx, vl})
+              .getResult(0);
+
+      Value rowFixed =
+          castScalableToFixed(rewriter, loc, rowScalable,
+                              cast<VectorType>(acc[r].getType()));
+      results.push_back(rowFixed);
+    }
+
+    return results;
   }
 
   SmallVector<Value> generateSpacemiT(PatternRewriter &rewriter, Location loc,
@@ -1425,14 +1579,24 @@ void populateVectorContractCustomKernelsPatterns(
   DictionaryAttr targetConfig = target.getConfiguration();
   if (isRISCV(targetConfig)) {
     // Keep vendor extension kernels and standard RVV kernels disjoint.
-    if (hasFeature(targetConfig, "+xsmtvdot")) {
+    if (hasFeature(targetConfig, "+xopu")) {
+      int64_t n0 = std::max<int64_t>(
+          1, getConfigNativeVectorSize(targetConfig).value_or(16));
+      int64_t half = std::max<int64_t>(1, n0 / 2);
+      int64_t quarter = std::max<int64_t>(1, n0 / 4);
+
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_OPU_Int8(n0, n0));
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_OPU_Int8(half, n0));
+      patterns.add<MMTCustomKernelPattern>(context,
+                                          MMTKernel_OPU_Int8(quarter, n0));
+    } else if (hasFeature(targetConfig, "+xsmtvdot")) {
       patterns.add<MMTCustomKernelPattern>(context, MMTKernel_SpacemiT_Int8());
       patterns.add<MMTCustomKernelPattern>(context, MMTKernel_SpacemiT_FP8());
     } else if (hasFeature(targetConfig, "+v")) {
       patterns.add<MMTCustomKernelPattern>(context,
-                                           MMTKernel_RVV_8x16x1_Int8());
+                                          MMTKernel_RVV_8x16x1_Int8());
       patterns.add<MMTCustomKernelPattern>(context,
-                                           MMTKernel_RVV_7x16x1_Int8());
+                                          MMTKernel_RVV_7x16x1_Int8());
     }
   }
   if (isAArch64(targetConfig)) {

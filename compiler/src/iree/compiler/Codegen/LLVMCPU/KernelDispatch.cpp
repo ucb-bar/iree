@@ -1579,6 +1579,69 @@ static bool getMatmulSpacemiTVectorSizes(
   return false;
 }
 
+static bool getMatmulOPUVectorSizes(mlir::FunctionOpInterface entryPointFn,
+                                    linalg::LinalgOp op,
+                                    SmallVectorImpl<int64_t> &sizes) {
+  auto targetAttr = IREE::HAL::ExecutableTargetAttr::lookup(entryPointFn);
+  if (!targetAttr) {
+    return false;
+  }
+  DictionaryAttr config = targetAttr.getConfiguration();
+
+  if (!isRISCV(config) || !hasFeature(config, "+v") ||
+      !hasFeature(config, "+xopu")) {
+    return false;
+  }
+
+  Type lhsType =
+      getElementTypeOrSelf(op.getDpsInputOperand(0)->get().getType());
+  Type rhsType =
+      getElementTypeOrSelf(op.getDpsInputOperand(1)->get().getType());
+  Type outType =
+      getElementTypeOrSelf(op.getDpsInitOperand(0)->get().getType());
+
+  bool isWideningI8ToI32 =
+      lhsType.isSignlessInteger(8) && rhsType.isSignlessInteger(8) &&
+      outType.isSignlessInteger(32);
+  if (!isWideningI8ToI32) {
+    return false;
+  }
+
+  FailureOr<linalg::ContractionDimensions> cDims =
+      linalg::inferContractionDims(op);
+  if (failed(cDims) || cDims->m.size() != 1) {
+    return false;
+  }
+
+  // Reuse IREE's existing native_vector_size plumbing.
+  // For RVV i8, the OPU full-width N tile is the number of e8 lanes.
+  int64_t n0 = std::max<int64_t>(1, getNativeVectorSizeInBytes(entryPointFn));
+  int64_t m0 = n0;
+
+  // Match the same tile family used on the encoding side:
+  //   M in {N0, N0/2, N0/4}, N = N0, K = 1.
+  //
+  // For static narrow-M cases, pick the same family member that the encoding
+  // heuristics will prefer.
+  ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
+  int64_t staticM = lhsShape[cDims->m[0]];
+  if (!ShapedType::isDynamic(staticM)) {
+    int64_t half = std::max<int64_t>(1, n0 / 2);
+    int64_t quarter = std::max<int64_t>(1, n0 / 4);
+
+    if (staticM <= quarter) {
+      m0 = quarter;
+    } else if (staticM <= half) {
+      m0 = half;
+    } else {
+      m0 = n0;
+    }
+  }
+
+  sizes.assign({m0, n0, 1});
+  return true;
+}
+
 
 /// Utility to compute the tile sizes for RISC-V Vector.
 /// Supports both non-widening float matmul and widening int matmul (i8 -> i32).
@@ -1588,6 +1651,10 @@ getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
                           SmallVectorImpl<int64_t> &sizes,
                           SmallVectorImpl<bool> &scalableSizeFlags) {
   if (!sizes.empty()) {
+    return;
+  }
+
+  if (getMatmulOPUVectorSizes(entryPointFn, op, sizes)) {
     return;
   }
   // Preserve dedicated SpacemiT dot-product path.
@@ -1740,11 +1807,16 @@ getMatmulVectorSizes(mlir::FunctionOpInterface entryPointFn,
 
   if (targetAttr && isRISCV(targetAttr.getConfiguration()) &&
       hasAnyVFeature(targetAttr.getConfiguration())) {
-    // Use default tile size for matmul_transpose_b &
-    // batch_matmul_transpose_b to avoid performance drop.
-    if (!isa<linalg::MatmulTransposeBOp, linalg::BatchMatmulTransposeBOp>(
+    DictionaryAttr cfg = targetAttr.getConfiguration();
+
+    // Historically we skipped MatmulTransposeB for RVV default heuristics.
+    // BUT: OPU and SpacemiT paths want the MMT form (transposed RHS), so allow it.
+    bool allowTransposeBForRiscv =
+        hasFeature(cfg, "+xopu") || hasFeature(cfg, "+xsmtvdot");
+
+    if (allowTransposeBForRiscv ||
+        !isa<linalg::MatmulTransposeBOp, linalg::BatchMatmulTransposeBOp>(
             op.getOperation())) {
-      // Try to maximize the vector register utilization rate for matmul.
       getMatmulRISCVVectorSizes(entryPointFn, op, vectorSize, matmulTileSizes,
                                 matmulScalableFlags);
     }
@@ -1781,19 +1853,43 @@ getMatmulVectorSizes(mlir::FunctionOpInterface entryPointFn,
 
   int numScalableDims = llvm::count(scalableTileFlags, true);
   SmallVector<int64_t> staticShape = op.getStaticLoopRanges();
-  if (numLoops >= 3) {
+    if (numLoops >= 3) {
+    Type lhsElemType =
+        getElementTypeOrSelf(op.getDpsInputOperand(0)->get().getType());
+    Type rhsElemType =
+        getElementTypeOrSelf(op.getDpsInputOperand(1)->get().getType());
+    Type outElemType =
+        getElementTypeOrSelf(op.getDpsInitOperand(0)->get().getType());
+
+    bool preserveOPUMDim =
+        targetAttr && isRISCV(targetAttr.getConfiguration()) &&
+        hasFeature(targetAttr.getConfiguration(), "+xopu") &&
+        lhsElemType.isSignlessInteger(8) &&
+        rhsElemType.isSignlessInteger(8) &&
+        outElemType.isSignlessInteger(32);
+
     for (int i = 0; i < (numLoops - 2); ++i) {
       int64_t dimSize = staticShape[i];
       int64_t tileSize = tileSizes[i];
       if (tileSize == 0 || ShapedType::isDynamic(dimSize)) {
         continue;
       }
+
+      // Keep the chosen OPU hardware M-tile intact so the vector.contract custom
+      // kernel still matches after tiling selection.
+      // For plain matmul, numLoops-3 is M.
+      // For batch matmul, numLoops-3 is still the M dimension (not batch).
+      if (preserveOPUMDim && i == (numLoops - 3)) {
+        continue;
+      }
+
       // Ad-hoc: Don't attempt to resize scalable tiles when numScalableDims
       // >= 2. For ArmSME (the only current user of 2D scalable vectors), tile
       // sizes must match SME tiles (and cannot be arbitrarily resized).
       if (numScalableDims >= 2 && scalableTileFlags[i]) {
         continue;
       }
+
       tileSizes[i] = std::min(tileSize, dimSize);
     }
   }

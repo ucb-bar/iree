@@ -466,6 +466,25 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
   // Integer 8 path.
   if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
       out.isSignlessInteger(32)) {
+
+    // Saturn OPU path.
+    // Note: This only makes sense if your lowering actually maps to OPU
+    // (either via custom kernels or a future ukernel). Otherwise it just
+    // influences tile choice.
+    if (hasFeature(config, "+xopu")) {
+      int N0 = vlen / 8;  // e8, m1 lanes
+
+      // If OPU HW tile is fixed 16x16, clamp here:
+      // N0 = std::min(N0, 16);
+
+      // Enumerate narrow-M truncations; narrow-N handled via transpose logic.
+      return {
+          TileMxNxK{N0, N0, 1},
+          TileMxNxK{N0 / 2, N0, 1},
+          TileMxNxK{N0 / 4, N0, 1},
+          TileMxNxK{1, N0, 1},
+      };
+    }
     if (hasFeature(config, "+xsmtvdot")) {
       // SpacemiT vmadot: fixed 4x4x8 blocks.
       return {
