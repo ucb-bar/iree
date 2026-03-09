@@ -81,6 +81,13 @@ public:
 
   // Adds passes to the |buildPreprocessingPassPipeline| pipeline at the end.
   virtual void extendPreprocessingPassPipeline(OpPassManager &passManager) {}
+
+  // Adds passes immediately after the GlobalOptimization pipeline and before
+  // dispatch creation begins. This is the right insertion point for plugins
+  // that recover accelerator semantics from normalized linalg/tensor/arithmetic
+  // IR produced by the core IREE global optimization pipeline.
+  virtual void extendPostGlobalOptimizationPassPipeline(
+      OpPassManager &passManager) {}
 };
 
 // Policy for how to activate the plugin.

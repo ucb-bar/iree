@@ -134,6 +134,13 @@ public:
     }
   }
 
+  void extendPostGlobalOptimizationPassPipeline(
+      OpPassManager &passManager) override {
+    for (auto *s : initializedSessions) {
+      s->extendPostGlobalOptimizationPassPipeline(passManager);
+    }
+  }
+
   // Populates the given list of HAL target devices for all initialized
   // plugins.
   void populateHALTargetDevices(IREE::HAL::TargetDeviceList &list);
