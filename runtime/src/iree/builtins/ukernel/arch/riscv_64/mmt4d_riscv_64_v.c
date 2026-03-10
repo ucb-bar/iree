@@ -8,6 +8,7 @@
 
 #include "iree/builtins/ukernel/arch/riscv_64/common_riscv_64.h"
 #include "iree/builtins/ukernel/arch/riscv_64/mmt4d_riscv_64_internal.h"
+#include "bme.h"
 
 IREE_UK_ATTRIBUTE_ALWAYS_INLINE static inline void
 iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v(
@@ -121,6 +122,87 @@ iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v(
   }
 }
 
+IREE_UK_ATTRIBUTE_ALWAYS_INLINE static inline void
+iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v(
+    void* IREE_UK_RESTRICT out_tile,
+    const void* IREE_UK_RESTRICT lhs_panel,
+    const void* IREE_UK_RESTRICT rhs_panel,
+    const iree_uk_mmt4d_params_t* params, int M0) {
+  IREE_UK_ASSERT(M0 >= 1 && M0 <= 16);
+  iree_uk_int32_t* IREE_UK_RESTRICT out_ptr = out_tile;
+  const iree_uk_int8_t* IREE_UK_RESTRICT lhs_ptr = lhs_panel;
+  const iree_uk_int8_t* IREE_UK_RESTRICT rhs_ptr = rhs_panel;
+
+  const int N0 = params->N0;
+  const int K = params->K;
+  size_t ml = M0;
+  size_t vl = N0;
+
+  // Performance case for M0=16 (LMUL=8)
+  if (M0 == 16) {
+    // init m0 to zero (LMUL=8)
+    asm volatile("vsetvli zero, %0, e32, m8, ta, ma" : : "r"(vl));
+    asm volatile("vmv.v.i v0, 0");
+    OPMVINBCAST(m0, v0);
+
+    // K-loop unrolled by 2
+    size_t k = 0;
+    while (k + 2 <= K) {
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(ml));  // ml=16
+      asm volatile("vle8.v v16, (%0)" : : "r"(&lhs_ptr[k * M0]));
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(vl));  // vl=N0
+      asm volatile("vle8.v v18, (%0)" : : "r"(&rhs_ptr[k * N0]));
+      VOPACC(m0, v18, v16);
+      k++;
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(ml));  // ml=16
+      asm volatile("vle8.v v20, (%0)" : : "r"(&lhs_ptr[k * M0]));
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(vl));  // vl=N0
+      asm volatile("vle8.v v22, (%0)" : : "r"(&rhs_ptr[k * N0]));
+      VOPACC(m0, v22, v20);
+      k++;
+    }
+    if (k < K) {
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(ml));  // ml=16
+      asm volatile("vle8.v v16, (%0)" : : "r"(&lhs_ptr[k * M0]));
+      asm volatile("vsetvli zero, %0, e8, m2, ta, ma" : : "r"(vl));  // vl=N0
+      asm volatile("vle8.v v18, (%0)" : : "r"(&rhs_ptr[k * N0]));
+      VOPACC(m0, v18, v16);
+    }
+
+    // store results
+    asm volatile("vsetvli zero, %0, e32, m8, ta, ma" : : "r"(vl));
+    for (size_t r = 0; r < ml; r++) {  // ml=16
+      VMV_VR(v0, r, m0);
+      asm volatile("vse32.v v0, (%0)" : : "r"(&out_ptr[r * N0]));
+    }
+  }
+  // Tail case for M0 < 16 (using LMUL=4)
+  else {
+    // 1. Initialize accumulators to ZERO (LMUL=4)
+    asm volatile("vsetvli zero, %0, e32, m4, ta, ma" : : "r"(vl));
+    asm volatile("vmv.v.i v0, 0");
+    OPMVINBCAST(m3, v0);  // Initialize m3 to zero
+
+    // 2. Main K-loop
+    for (int k = 0; k < K; ++k) {
+      asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(ml));
+      asm volatile("vle8.v v5, (%0)" : : "r"(&lhs_ptr[k * M0]));
+
+      asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(vl));
+      asm volatile("vle8.v v4, (%0)" : : "r"(&rhs_ptr[k * N0]));
+
+      VOPACC(m3, v4, v5);
+    }
+
+    // 3. Store results
+    asm volatile("vsetvli zero, %0, e32, m4, ta, ma" : : "r"(vl));
+    for (size_t r = 0; r < ml; r++) {
+      VMV_VR(v0, r, m3);
+      asm volatile("vse32.v v0, (%0)" : : "r"(&out_ptr[r * N0]));
+    }
+  }
+}
+
 IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
     iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
     iree_uk_mmt4d_tile_f32f32f32_1xXXx1_riscv_64_v, 1)
@@ -133,3 +215,22 @@ IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
 IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
     iree_uk_mmt4d_tile_f32f32f32_1xXXx1_to_7xXXx1_riscv_64_v,
     iree_uk_mmt4d_tile_f32f32f32_7xXXx1_riscv_64_v, 7)
+
+// *** UPDATED SECTION ***
+// Point all s8s8s32 tiles to the new generic function
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_riscv_64_v, 1)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_2xXXx1_riscv_64_v, 2)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_4xXXx1_riscv_64_v, 4)
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_8xXXx1_riscv_64_v, 8)
+// Add the new M0=16 tile
+IREE_UK_MMT4D_TILE_FUNC_IMPL_FOR_M0(
+    iree_uk_mmt4d_tile_s8s8s32_1xXXx1_to_16xXXx1_riscv_64_v,
+    iree_uk_mmt4d_tile_s8s8s32_16xXXx1_riscv_64_v, 16)
