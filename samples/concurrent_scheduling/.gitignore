@@ -1,0 +1,10 @@
+# Build artifacts
+*.vmfb
+*.o
+*.so
+*.dylib
+*.dll
+
+# Compiled binaries
+concurrent_scheduling_oracle
+concurrent_scheduling_vanilla

@@ -1,0 +1,100 @@
+# Copyright 2024 The IREE Authors
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+load("//build_tools/bazel:build_defs.oss.bzl", "iree_runtime_cc_binary")
+load("//build_tools/bazel:iree_bytecode_module.bzl", "iree_bytecode_module")
+load("//build_tools/bazel:iree_lit_test.bzl", "iree_lit_test_suite")
+
+package(
+    default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
+    licenses = ["notice"],  # Apache 2.0
+)
+
+# Model bytecode modules
+iree_bytecode_module(
+    name = "model_a_conv",
+    src = "model_a_conv.mlir",
+    flags = [
+        "--iree-hal-target-device=local",
+        "--iree-hal-local-target-device-backends=llvm-cpu",
+    ],
+)
+
+iree_bytecode_module(
+    name = "model_b_dense",
+    src = "model_b_dense.mlir",
+    flags = [
+        "--iree-hal-target-device=local",
+        "--iree-hal-local-target-device-backends=llvm-cpu",
+    ],
+)
+
+iree_bytecode_module(
+    name = "model_c_residual",
+    src = "model_c_residual.mlir",
+    flags = [
+        "--iree-hal-target-device=local",
+        "--iree-hal-local-target-device-backends=llvm-cpu",
+    ],
+)
+
+# Vanilla async pipeline module
+iree_bytecode_module(
+    name = "pipeline_vanilla_async",
+    src = "pipeline_vanilla_async.mlir",
+    flags = [
+        "--iree-execution-model=async-external",
+        "--iree-hal-target-device=local",
+        "--iree-hal-local-target-device-backends=llvm-cpu",
+    ],
+)
+
+# Oracle scheduler executable
+iree_runtime_cc_binary(
+    name = "concurrent_scheduling_oracle",
+    srcs = ["concurrent_scheduling_oracle.c"],
+    deps = [
+        "//runtime/src/iree/base",
+        "//runtime/src/iree/hal",
+        "//runtime/src/iree/modules/hal:types",
+        "//runtime/src/iree/runtime",
+    ],
+)
+
+# Vanilla scheduler executable
+iree_runtime_cc_binary(
+    name = "concurrent_scheduling_vanilla",
+    srcs = ["concurrent_scheduling_vanilla.c"],
+    deps = [
+        "//runtime/src/iree/base",
+        "//runtime/src/iree/hal",
+        "//runtime/src/iree/modules/hal:types",
+        "//runtime/src/iree/runtime",
+    ],
+)
+
+# Lit tests
+iree_lit_test_suite(
+    name = "lit",
+    srcs = [
+        "pipeline_vanilla_async.mlir",
+    ],
+    data = [
+        "model_a_conv.mlir",
+        "model_b_dense.mlir",
+        "model_c_residual.mlir",
+    ],
+    tags = [
+        "driver=local-task",
+        "hostonly",
+    ],
+    tools = [
+        "//tools:iree-compile",
+        "//tools:iree-run-module",
+        "@llvm-project//llvm:FileCheck",
+    ],
+)

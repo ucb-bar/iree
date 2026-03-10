@@ -464,6 +464,29 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
       };
     }
   }
+  // This adds support for our s8*sx`8->s32 kernel.
+  if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
+      out.isSignlessInteger(32)) {
+    // This logic follows the f32 case, as both use 32-bit accumulators.
+    // For your +zvl512b target, vlen = 512.
+    // N0 = (512 bits / 32 bits_per_element) * 4_LMUL = 64 elements.
+    
+    // N0 for LMUL=8 path (M0=16)
+    int N0_lmul8 = vlen / 4;
+    // N0 for LMUL=4 path (M0=8, 4, 2, 1)
+    int N0_lmul4 = vlen / 8;
+
+    return {
+        // --- LMUL=8 Path ---
+        TileMxNxK{16, N0_lmul8, 1}, // Target tile for s8s8s32 (LMUL=8)
+
+        // --- LMUL=4 Paths ---
+        TileMxNxK{8, N0_lmul4, 1}, // Truncation (LMUL=4)
+        TileMxNxK{4, N0_lmul4, 1}, // Truncation (LMUL=4)
+        TileMxNxK{2, N0_lmul4, 1}, // Truncation (LMUL=4)
+        TileMxNxK{1, N0_lmul4, 1}, // Truncation (vecmat) (LMUL=4)
+    };
+  }
   // Fallback - no architecture-optimized tile size for this case.
   return {};
 }
