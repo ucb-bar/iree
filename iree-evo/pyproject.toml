@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iree-evo"
+version = "0.1.0"
+description = "IREE-Evo: Autonomous Agentic Compiler Optimization Framework"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0 WITH LLVM-exception"}
+authors = [
+    {name = "IREE Authors"},
+]
+dependencies = [
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0",
+    "mypy>=0.950",
+]
+
+[project.scripts]
+iree-evo = "iree_evo.cli:main"
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
