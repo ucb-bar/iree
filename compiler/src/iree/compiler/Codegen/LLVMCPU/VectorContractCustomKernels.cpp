@@ -247,6 +247,8 @@ struct MMTKernel {
   // C inline_asm syntax: comma-separated list of raw register names e.g.
   // "v14,v15"
   const char *asmClobbers = nullptr;
+  // Whether this kernel is implemented by RVV intrinsics instead of inline asm.
+  bool useRVVIntrinsics = false;
 
   void validate() const {
     assert(m0 * k0 == lhsRegSize * lhsRegs); // number of elements of LHS
@@ -257,6 +259,47 @@ struct MMTKernel {
     assert(accType != ScalarType::None);
   }
 };
+
+static size_t getRISCVVVlenFromCPUFeatures(DictionaryAttr config) {
+  if (hasFeature(config, "+zvl65536b")) {
+    return 65536;
+  } else if (hasFeature(config, "+zvl32768b")) {
+    return 32768;
+  } else if (hasFeature(config, "+zvl16384b")) {
+    return 16384;
+  } else if (hasFeature(config, "+zvl8192b")) {
+    return 8192;
+  } else if (hasFeature(config, "+zvl4096b")) {
+    return 4096;
+  } else if (hasFeature(config, "+zvl2048b")) {
+    return 2048;
+  } else if (hasFeature(config, "+zvl1024b")) {
+    return 1024;
+  } else if (hasFeature(config, "+zvl512b")) {
+    return 512;
+  } else if (hasFeature(config, "+zvl256b")) {
+    return 256;
+  }
+  return 128;
+}
+
+static MMTKernel MMTKernel_RVV_i8i8i32(int64_t m0, int64_t n0) {
+  MMTKernel kernel;
+  kernel.lhsType = MMTKernel::ScalarType::I8;
+  kernel.rhsType = MMTKernel::ScalarType::I8;
+  kernel.accType = MMTKernel::ScalarType::I32;
+  kernel.m0 = static_cast<int16_t>(m0);
+  kernel.k0 = 1;
+  kernel.n0 = static_cast<int16_t>(n0);
+  kernel.lhsRegSize = static_cast<int16_t>(m0);
+  kernel.rhsRegSize = static_cast<int16_t>(n0);
+  kernel.accRegSize = static_cast<int16_t>(n0);
+  kernel.lhsRegs = 1;
+  kernel.rhsRegs = 1;
+  kernel.accRegs = static_cast<int16_t>(m0);
+  kernel.useRVVIntrinsics = true;
+  return kernel;
+}
 
 // i8*i8->i32 kernel for Aarch64 NEON.
 //
@@ -703,6 +746,9 @@ public:
                               ArrayRef<Value> lhs, ArrayRef<Value> rhs,
                               ArrayRef<Value> acc) {
     validateOperands(lhs, rhs, acc);
+    if (isRVVInt8Kernel()) {
+      return generateRVVInt8Intrinsics(rewriter, loc, lhs, rhs, acc);
+    }
     if (kernel.asmImpl) {
       return generateAsm(rewriter, loc, lhs, rhs, acc);
     }
@@ -735,6 +781,105 @@ private:
   MLIRContext *const context;
   const MMTKernel kernel;
   const IREE::HAL::ExecutableTargetAttr target;
+
+  bool isRVVInt8Kernel() const {
+    if (!target) {
+      return false;
+    }
+    DictionaryAttr config = target.getConfiguration();
+    return isRISCV(config) && hasFeature(config, "+v") &&
+           kernel.useRVVIntrinsics &&
+           kernel.lhsType == MMTKernel::ScalarType::I8 &&
+           kernel.rhsType == MMTKernel::ScalarType::I8 &&
+           kernel.accType == MMTKernel::ScalarType::I32 && kernel.k0 == 1 &&
+           kernel.lhsRegs == 1 && kernel.rhsRegs == 1 &&
+           kernel.lhsRegSize == kernel.m0 && kernel.rhsRegSize == kernel.n0 &&
+           kernel.accRegSize == kernel.n0 && kernel.accRegs == kernel.m0;
+  }
+
+  Value castFixedToScalable(PatternRewriter &rewriter, Location loc,
+                            Value fixedVec, VectorType scalableType) {
+    Value undef = rewriter.create<LLVM::UndefOp>(loc, scalableType);
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(0));
+
+    auto callOp = rewriter.create<LLVM::CallIntrinsicOp>(
+        loc, scalableType, rewriter.getStringAttr("llvm.vector.insert"),
+        ValueRange{undef, fixedVec, zero});
+    return callOp.getResult(0);
+  }
+
+  Value castScalableToFixed(PatternRewriter &rewriter, Location loc,
+                            Value scalableVec, VectorType fixedType) {
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(0));
+
+    auto callOp = rewriter.create<LLVM::CallIntrinsicOp>(
+        loc, fixedType, rewriter.getStringAttr("llvm.vector.extract"),
+        ValueRange{scalableVec, zero});
+    return callOp.getResult(0);
+  }
+
+  SmallVector<Value> generateRVVInt8Intrinsics(PatternRewriter &rewriter, Location loc,
+                                     ArrayRef<Value> lhs, ArrayRef<Value> rhs,
+                                     ArrayRef<Value> acc) {
+    DictionaryAttr config = target.getConfiguration();
+    int64_t vlen = static_cast<int64_t>(getRISCVVVlenFromCPUFeatures(config));
+
+    // For RVV scalable vectors:
+    //   fixed_length = scalable_count * vscale
+    // and on RVV:
+    //   vscale = VLEN / 64.
+    //
+    // Therefore:
+    //   scalable_count = n0 * 64 / VLEN.
+    assert((kernel.n0 * 64) % vlen == 0 &&
+           "expected RVV kernel n0 to map to a scalable vector");
+    int64_t scalableCount = (kernel.n0 * 64) / vlen;
+
+    VectorType scalableI8 =
+        VectorType::get({scalableCount}, rewriter.getIntegerType(8), {true});
+    VectorType scalableI16 =
+        VectorType::get({scalableCount}, rewriter.getIntegerType(16), {true});
+    VectorType scalableI32 =
+        VectorType::get({scalableCount}, rewriter.getIntegerType(32), {true});
+
+    Value rhsScalable = castFixedToScalable(rewriter, loc, rhs[0], scalableI8);
+    Value vl = rewriter.create<LLVM::ConstantOp>(
+        loc, rewriter.getI64Type(), rewriter.getI64IntegerAttr(kernel.n0));
+
+    SmallVector<Value> widenedProducts;
+    widenedProducts.reserve(kernel.m0);
+
+    // Emit all widening multiplies first.
+    for (int64_t i = 0; i < kernel.m0; ++i) {
+      Value lhsScalar = extract(rewriter, loc, lhs[0], i);
+      Value passthru = rewriter.create<LLVM::UndefOp>(loc, scalableI16);
+      auto mulOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          loc, scalableI16, rewriter.getStringAttr("llvm.riscv.vwmul"),
+          ValueRange{passthru, rhsScalable, lhsScalar, vl});
+      widenedProducts.push_back(mulOp.getResult(0));
+    }
+
+    SmallVector<Value> results;
+    results.reserve(kernel.m0);
+
+    // Then emit the widening adds.
+    for (int64_t i = 0; i < kernel.m0; ++i) {
+      Value accScalable =
+          castFixedToScalable(rewriter, loc, acc[i], scalableI32);
+      auto addOp = rewriter.create<LLVM::CallIntrinsicOp>(
+          loc, scalableI32, rewriter.getStringAttr("llvm.riscv.vwadd.w"),
+          ValueRange{accScalable, accScalable, widenedProducts[i], vl});
+
+      Value resultFixed = castScalableToFixed(
+          rewriter, loc, addOp.getResult(0),
+          cast<VectorType>(acc[i].getType()));
+      results.push_back(resultFixed);
+    }
+
+    return results;
+  }
 
   // Helper for generate(). Asserts sanity of the vector-of-register-vectors.
   void validateOperands(ArrayRef<Value> lhs, ArrayRef<Value> rhs,
@@ -1147,6 +1292,21 @@ void populateVectorContractCustomKernelsPatterns(
     return;
   }
   DictionaryAttr targetConfig = target.getConfiguration();
+  if (isRISCV(targetConfig) && hasFeature(targetConfig, "+v")) {
+    int64_t vlen = static_cast<int64_t>(getRISCVVVlenFromCPUFeatures(targetConfig));
+    int64_t n0 = vlen / 16;
+
+    // Follow the existing RVV tiling style: primary shape plus truncations.
+    patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(8, n0));
+    patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(7, n0));
+    patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(4, n0));
+    patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(2, n0));
+    patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(1, n0));
+
+    // Matvec-style widened-N case used by KernelDispatch.
+    patterns.add<MMTCustomKernelPattern>(context,
+                                         MMTKernel_RVV_i8i8i32(1, 2 * n0));
+  }
   if (isAArch64(targetConfig)) {
     // TODO: add a "kernel benefit" system whereby if two kernels are available
     // for the same shape and same data types, the fastest one (ie the one
