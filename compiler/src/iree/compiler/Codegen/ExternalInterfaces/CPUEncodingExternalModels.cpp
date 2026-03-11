@@ -464,6 +464,21 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
       };
     }
   }
+  if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
+      out.isSignlessInteger(32)) {
+    // VLEN-aware tile size selection for widening integer matmul.
+    //
+    // Follow the same style as the existing RVV floating-point path:
+    // keep K = 1 and derive N from VLEN. Here, the accumulator type is i32.
+    int N0 = vlen / 16;
+    return {
+        TileMxNxK{8, N0, 1}, // Primary shape for RVV widening int8 kernels.
+        TileMxNxK{7, N0, 1}, // Truncation of the above.
+        TileMxNxK{4, N0, 1}, // Truncation of the above.
+        TileMxNxK{2, N0, 1}, // Truncation of the above.
+        TileMxNxK{1, N0, 1}, // Truncation of the above.
+    };
+  }
   // Fallback - no architecture-optimized tile size for this case.
   return {};
 }
