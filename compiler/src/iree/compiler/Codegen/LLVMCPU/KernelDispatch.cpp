@@ -1522,6 +1522,21 @@ static FailureOr<Type> nonWideningLinalgElementType(linalg::LinalgOp op) {
   return inputAndOutputElementTypes[0];
 }
 
+// Checks if the linalg op is a matmul with int8 inputs and int32 output, which
+// is a common pattern for quantized inference. This is used to determine whether
+// we should apply special heuristics for widening int8 matmuls to int32 accumulators.
+static bool isWideningInt8ToI32Matmul(linalg::LinalgOp op) {
+  Type lhsType =
+      getElementTypeOrSelf(op.getDpsInputOperand(0)->get().getType());
+  Type rhsType =
+      getElementTypeOrSelf(op.getDpsInputOperand(1)->get().getType());
+  Type outType =
+      getElementTypeOrSelf(op.getDpsInitOperand(0)->get().getType());
+
+  return lhsType.isSignlessInteger(8) && rhsType.isSignlessInteger(8) &&
+         outType.isSignlessInteger(32);
+}
+
 /// Compute vector tile sizes using a heuristic that aims to keep the entire
 /// ACC/OUT tile in registers, leave a few registers for LHS/RHS columns
 /// or rows, and all that while not exceeding the number of available registers.
@@ -1585,14 +1600,19 @@ static void getMatmulVectorSizesUsingFillRegisterFileHeuristic(
 }
 
 /// Utility to compute the tile sizes for RISC-V Vector.
-/// For now, it only supports nonWideningLinalgElementType float.
-/// TileSize is set to m = 7, n = maxNumberElementsForLMUL4, and k = 1.
 ///
-/// Example: for an pure f32-matmul and a 512-bit vector register.
-/// nativeVectorSize is equal to VLEN * LMUL2 / 8, so it's 128.
+/// For non-widening floating-point matmul, tile size is set to
+/// m = 7, n = maxNumberElementsForLMUL4, and k = 1.
+///
+/// For widening integer matmul currently supported in this path
+/// (i8 * i8 -> i32), tile size is set to
+/// m = 8, n = maxNumberElementsForLMUL4, and k = 1.
+///
+/// Example: for a pure f32-matmul and a 512-bit vector register,
+/// nativeVectorSize is equal to VLEN * LMUL2 / 8, so it is 128.
 /// maxNumberElementsForLMUL4 = 128 * 2 * 8 / 32 = 64.
 ///
-/// TODO: Currently it only supports for nonWideningLinalgElementType.
+/// TODO: Generalize widening support beyond i8 * i8 -> i32.
 static void
 getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
                           linalg::LinalgOp op, int64_t vectorSize,
@@ -1601,16 +1621,44 @@ getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
   if (sizes.empty()) {
     getDefaultMatmulVectorSizes(op, vectorSize, sizes, scalableSizeFlags);
   }
-  // TODO: support widening matmul.
-  // Determines n dimension tile size with VLEN for
-  // nonWideningLinalgElementType.
-  FailureOr<Type> elementType = nonWideningLinalgElementType(op);
-  if (failed(elementType)) {
+
+  FailureOr<linalg::ContractionDimensions> cDims =
+      linalg::inferContractionDims(op);
+  if (failed(cDims) || cDims->m.size() != 1) {
     return;
   }
 
   // nativeVectorSize is calculated with VLEN and LMUL=2.
   int64_t nativeVectorSize = getNativeVectorSizeInBytes(entryPointFn);
+  constexpr int64_t kByteSizeInBits = 8;
+
+  // Widening integer path: i8 * i8 -> i32.
+  if (isWideningInt8ToI32Matmul(op)) {
+    constexpr int64_t kAccumulatorBitWidth = 32;
+
+    // Follow the same structure as the existing RVV float path:
+    // use K = 1 and derive N from the accumulator width.
+    int64_t maxNumberElementsForLMUL4 =
+        (nativeVectorSize * 2 * kByteSizeInBits) / kAccumulatorBitWidth;
+
+    sizes.assign({8, maxNumberElementsForLMUL4, 1});
+    scalableSizeFlags.assign({false, false, false});
+
+    ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
+    // If m = 1, use a wider N tile, matching the existing RVV float behavior.
+    if (lhsShape[cDims->m[0]] == 1) {
+      sizes[0] = 1;
+      sizes[1] *= 2;
+    }
+    return;
+  }
+
+  // Existing non-widening floating-point path.
+  FailureOr<Type> elementType = nonWideningLinalgElementType(op);
+  if (failed(elementType)) {
+    return;
+  }
+
   int64_t elementSize;
   if (elementType->isF16()) {
     elementSize = 16;
@@ -1619,24 +1667,19 @@ getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
   } else if (elementType->isF64()) {
     elementSize = 64;
   } else {
-    // TODO: support int data type
     return;
   }
-  FailureOr<linalg::ContractionDimensions> cDims =
-      linalg::inferContractionDims(op);
-  if (failed(cDims) || cDims->m.size() != 1) {
-    return;
-  }
+
   // Use 7 x lmul4 to fully utilize vector registers.
   sizes[0] = 7;
-  // Calculate tile size for the main vector dimension (N).
-  constexpr int64_t kByteSizeInBits = 8;
+
   int64_t maxNumberElementsForLMUL4 =
       (nativeVectorSize * 2 * kByteSizeInBits) / elementSize;
   sizes[1] = maxNumberElementsForLMUL4;
   sizes[2] = 1;
+
   ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
-  // If m = 1, set tile size to 1 x lmul8
+  // If m = 1, set tile size to 1 x lmul8.
   if (lhsShape[cDims->m[0]] == 1) {
     sizes[0] = 1;
     sizes[1] *= 2;
