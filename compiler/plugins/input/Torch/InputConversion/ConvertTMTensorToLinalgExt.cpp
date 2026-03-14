@@ -199,7 +199,8 @@ struct AttentionOpConversion
     {
       auto *block = rewriter.createBlock(&attention.getRegion());
       OpBuilder::InsertionGuard g(rewriter);
-      block->addArgument(rewriter.getF32Type(), loc);
+      // Preserve the frontend attention compute type instead of forcing f32.
+      block->addArgument(targetType, loc);
       rewriter.setInsertionPoint(block, block->begin());
 
       IREE::LinalgExt::YieldOp::create(rewriter, loc, block->getArgument(0));

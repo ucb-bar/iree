@@ -573,10 +573,13 @@ struct TruncFToSmallFloat final : OpRewritePattern<arith::TruncFOp> {
 // ExtF from small float emulation pattern
 //===----------------------------------------------------------------------===//
 
-/// Emulates arith.extf from small floats (fp4, fp8) to f32 using integer bit
+/// Emulates arith.extf from small floats (fp4, fp8) using integer bit
 /// manipulation. This implementation follows IREE's
 /// runtime/src/iree/base/internal/math.h
 /// (specifically iree_math_make_f32_from_bits).
+///
+/// The conversion first reconstructs an fp32 value and then, if needed, casts
+/// to the requested destination floating-point type.
 ///
 /// For normal values: adjust exponent bias and shift mantissa.
 ///
@@ -596,7 +599,8 @@ struct ExtFFromSmallFloat final : OpRewritePattern<arith::ExtFOp> {
 
     unsigned inputBitWidth = inputElemType.getIntOrFloatBitWidth();
     if ((inputBitWidth != 4 && inputBitWidth != 8) ||
-        !isa<Float32Type>(resultElemType)) {
+        !isa<FloatType>(resultElemType) ||
+        resultElemType.getIntOrFloatBitWidth() <= inputBitWidth) {
       return failure();
     }
 
@@ -722,9 +726,24 @@ struct ExtFFromSmallFloat final : OpRewritePattern<arith::ExtFOp> {
     // NaN).
     result = arith::SelectOp::create(rewriter, loc, isNaN, cF32NaN, result);
 
-    // Bitcast to f32.
-    result = arith::BitcastOp::create(rewriter, loc, resultType, result);
-    rewriter.replaceOp(op, result);
+    // Bitcast to f32 first.
+    Value f32Result =
+        arith::BitcastOp::create(rewriter, loc, helper.getF32Type(), result);
+
+    // If requested destination is not f32, cast from f32.
+    Value finalResult = f32Result;
+    if (resultType != helper.getF32Type()) {
+      unsigned resultBitWidth = resultElemType.getIntOrFloatBitWidth();
+      if (resultBitWidth < 32) {
+        finalResult =
+            arith::TruncFOp::create(rewriter, loc, resultType, f32Result);
+      } else if (resultBitWidth > 32) {
+        finalResult =
+            arith::ExtFOp::create(rewriter, loc, resultType, f32Result);
+      }
+    }
+
+    rewriter.replaceOp(op, finalResult);
 
     return success();
   }

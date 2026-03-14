@@ -198,6 +198,22 @@ func.func @extf_cpu_vector_f8e5m2fnuz_to_f32(%arg0 : vector<4xf8E5M2FNUZ>) -> ve
 
 // -----
 
+// Test vector extf emulation for CPU target with non-f32 destination.
+// CHECK-LABEL: func.func @extf_cpu_vector_f8e4m3fn_to_f16
+// CHECK-SAME:    (%[[ARG0:.*]]: vector<4xf8E4M3FN>) -> vector<4xf16>
+// CHECK:         %[[BITCAST:.*]] = arith.bitcast %[[ARG0]] : vector<4xf8E4M3FN> to vector<4xi8>
+// CHECK:         %[[EXT:.*]] = arith.extui %[[BITCAST]] : vector<4xi8> to vector<4xi32>
+// CHECK:         %[[F32:.*]] = arith.bitcast %{{.*}} : vector<4xi32> to vector<4xf32>
+// CHECK:         %[[F16:.*]] = arith.truncf %[[F32]] : vector<4xf32> to vector<4xf16>
+// CHECK:         return %[[F16]] : vector<4xf16>
+func.func @extf_cpu_vector_f8e4m3fn_to_f16(%arg0 : vector<4xf8E4M3FN>) -> vector<4xf16> attributes
+{ hal.executable.target = #hal.executable.target<"llvm-cpu", "xyz", {target_triple = "x86_64-xyz-xyz"}>}{
+    %0 = arith.extf %arg0 : vector<4xf8E4M3FN> to vector<4xf16>
+    return %0 : vector<4xf16>
+}
+
+// -----
+
 // Test f8E4M3FNUZ truncf emulation for CPU target.
 //
 // CHECK-LABEL: func.func @truncf_cpu_f32_to_f8e4m3fnuz

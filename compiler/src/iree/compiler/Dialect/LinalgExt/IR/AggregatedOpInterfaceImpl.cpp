@@ -438,13 +438,13 @@ FailureOr<SmallVector<Value>> AttentionOp::decomposeOperation(OpBuilder &b) {
   auto qETy = getElementTypeOrSelf(query.getType());
   bool lowPrecision = qETy.getIntOrFloatBitWidth() <= 8;
 
-  // We compute output of first matmul in f32.
-  Type f32Type = b.getF32Type();
+  // Keep decomposition in the attention score type instead of forcing f32.
+  Type scoreType = getRegion().front().getArgument(0).getType();
 
   // ---- QK Matmul + elementwise math ----
   Value s = computeQKAndElementwise(
       loc, b, query, key, getScale(), mask, qMap, kMap, sMap, getMaskMap(),
-      sizes, f32Type, getRegion(), qkAttrs, lowPrecision, /*useExp2=*/true);
+      sizes, scoreType, getRegion(), qkAttrs, lowPrecision, /*useExp2=*/true);
 
   // ---- Softmax ----
 
@@ -461,16 +461,17 @@ FailureOr<SmallVector<Value>> AttentionOp::decomposeOperation(OpBuilder &b) {
   SmallVector<OpFoldResult> rowRedSize =
       applyPermutationMap<OpFoldResult>(maxMap, sizes);
 
-  Value rowRedEmpty = tensor::EmptyOp::create(b, loc, rowRedSize, f32Type);
+  Value rowRedEmpty = tensor::EmptyOp::create(b, loc, rowRedSize, scoreType);
 
   Value accInit = arith::getIdentityValue(arith::AtomicRMWKind::addf,
                                           getElementTypeOrSelf(output), b, loc,
                                           /*useOnlyFiniteValue=*/true);
   Value maxInit =
-      arith::getIdentityValue(arith::AtomicRMWKind::maximumf, f32Type, b, loc,
+      arith::getIdentityValue(arith::AtomicRMWKind::maximumf, scoreType, b,
+                              loc,
                               /*useOnlyFiniteValue=*/true);
   Value sumInit =
-      arith::getIdentityValue(arith::AtomicRMWKind::addf, f32Type, b, loc);
+      arith::getIdentityValue(arith::AtomicRMWKind::addf, scoreType, b, loc);
 
   Value accFill =
       linalg::FillOp::create(b, loc, ValueRange{accInit}, output).getResult(0);

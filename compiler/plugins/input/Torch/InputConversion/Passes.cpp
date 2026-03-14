@@ -46,13 +46,19 @@ void createTorchToIREEPipeline(
   }
   pm.addNestedPass<func::FuncOp>(torch::Torch::createRecomposeComplexOpsPass());
   pm.addNestedPass<func::FuncOp>(createBitCastTensorPass());
-  pm.addNestedPass<func::FuncOp>(
-      torch::Torch::createReduceOpVariantsPass(llvm::StringRef()));
+  // Normalize custom torch.operator forms before ReduceOpVariants, which
+  // expects unsupported torch.operator instances to be eliminated.
   pm.addNestedPass<func::FuncOp>(
       mlir::torch::TorchConversion::createConvertCustomQuantOpPass());
+  pm.addNestedPass<func::FuncOp>(
+      torch::Torch::createReduceOpVariantsPass(llvm::StringRef()));
   if (options.decompose) {
     pm.addNestedPass<func::FuncOp>(
         torch::Torch::createDecomposeComplexOpsPass(BackendLegalOps::get()));
+    // DecomposeComplexOps may introduce additional custom torch.operator forms
+    // (for example quantized matmul rewrites), so run normalization again.
+    pm.addNestedPass<func::FuncOp>(
+        mlir::torch::TorchConversion::createConvertCustomQuantOpPass());
   }
   pm.addNestedPass<func::FuncOp>(torch::Torch::createFuseQuantizedOpsPass());
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());

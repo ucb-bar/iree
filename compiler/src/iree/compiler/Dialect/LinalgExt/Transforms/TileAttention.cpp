@@ -71,18 +71,18 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
   SmallVector<OpFoldResult> rowRedSize =
       applyPermutationMap<OpFoldResult>(maxMap, sizes);
 
-  Type f32Type = rewriter.getF32Type();
-  Value acc = tensor::EmptyOp::create(rewriter, loc, accSize, f32Type);
+  Type scoreType = attnOp.getRegion().front().getArgument(0).getType();
+  Value acc = tensor::EmptyOp::create(rewriter, loc, accSize, scoreType);
   Value rowRedEmpty =
-      tensor::EmptyOp::create(rewriter, loc, rowRedSize, f32Type);
+      tensor::EmptyOp::create(rewriter, loc, rowRedSize, scoreType);
 
   Value accInit =
-      arith::getIdentityValue(arith::AtomicRMWKind::addf, f32Type, rewriter,
+      arith::getIdentityValue(arith::AtomicRMWKind::addf, scoreType, rewriter,
                               loc, /*useOnlyFiniteValue=*/true);
   Value maxInit =
-      arith::getIdentityValue(arith::AtomicRMWKind::maximumf, f32Type, rewriter,
-                              loc, /*useOnlyFiniteValue=*/true);
-  Value sumInit = arith::getIdentityValue(arith::AtomicRMWKind::addf, f32Type,
+      arith::getIdentityValue(arith::AtomicRMWKind::maximumf, scoreType,
+                              rewriter, loc, /*useOnlyFiniteValue=*/true);
+  Value sumInit = arith::getIdentityValue(arith::AtomicRMWKind::addf, scoreType,
                                           rewriter, loc);
 
   Value accFill =
@@ -135,8 +135,7 @@ void convertToOnlineAttention(IREE::LinalgExt::AttentionOp attnOp,
         Value one = arith::ConstantOp::create(
             b, loc, b.getFloatAttr(args[0].getType(), 1.0));
         Value reciprocal = arith::DivFOp::create(b, loc, one, args[0]);
-        // Both sum and x are in fp32, as created earlier, so we only need
-        // to cast after the mul.
+        // Sum and x are kept in the attention score type through this pass.
         Value result = arith::MulFOp::create(b, loc, reciprocal, args[1]);
         // Cast result to the required type by attention output.
         result = convertScalarToDtype(b, loc, result, args[2].getType(),
