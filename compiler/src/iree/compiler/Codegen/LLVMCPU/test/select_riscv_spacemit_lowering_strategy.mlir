@@ -198,7 +198,7 @@ func.func @matmul_generic_riscv(%lhs: tensor<128x256xi8>, %rhs: tensor<256x128xi
   return %res : tensor<128x128xi32>
 }
 
-// CHECK-DAG:     #[[CONFIG:.+]] = #iree_cpu.lowering_config<{{.*}}vector_common_parallel = [8, 32, 0]
+// CHECK-DAG:     #[[CONFIG:.+]] = #iree_cpu.lowering_config<{{.*}}vector_common_parallel = [8, 16, 0]
 // CHECK-LABEL: func.func @matmul_generic_riscv
 // CHECK:       linalg.matmul
 // CHECK-SAME:    lowering_config = #[[CONFIG]]

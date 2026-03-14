@@ -1600,10 +1600,18 @@ static bool getMatmulOPUVectorSizes(mlir::FunctionOpInterface entryPointFn,
   Type outType =
       getElementTypeOrSelf(op.getDpsInitOperand(0)->get().getType());
 
+  auto isFp8Type = [](Type type) -> bool {
+    auto floatType = dyn_cast<FloatType>(type);
+    return floatType && floatType.getWidth() == 8;
+  };
+
   bool isWideningI8ToI32 =
       lhsType.isSignlessInteger(8) && rhsType.isSignlessInteger(8) &&
       outType.isSignlessInteger(32);
-  if (!isWideningI8ToI32) {
+  bool isFp8ToFloat =
+      isFp8Type(lhsType) && isFp8Type(rhsType) && isa<FloatType>(outType) &&
+      outType.getIntOrFloatBitWidth() >= 16;
+  if (!isWideningI8ToI32 && !isFp8ToFloat) {
     return false;
   }
 
@@ -1613,13 +1621,18 @@ static bool getMatmulOPUVectorSizes(mlir::FunctionOpInterface entryPointFn,
     return false;
   }
 
-  // Reuse IREE's existing native_vector_size plumbing.
-  // For RVV i8, the OPU full-width N tile is the number of e8 lanes.
-  int64_t n0 = std::max<int64_t>(1, getNativeVectorSizeInBytes(entryPointFn));
+  // OPU currently targets a 16x16 base tile.
+  int64_t n0 = std::min<int64_t>(
+      16, std::max<int64_t>(1, getNativeVectorSizeInBytes(entryPointFn)));
   int64_t m0 = n0;
 
   // Match the same tile family used on the encoding side:
-  //   M in {N0, N0/2, N0/4}, N = N0, K = 1.
+  //   M in {N0, N0/2, N0/4}, N = N0, K = K0.
+  //
+  // For int8 we keep K0=128 (native OPU i8 path). For fp8 we currently keep a
+  // smaller K0 to avoid oversized vector contracts until native fp8 OPU
+  // lowering is wired.
+  int64_t k0 = isWideningI8ToI32 ? 128 : 8;
   //
   // For static narrow-M cases, pick the same family member that the encoding
   // heuristics will prefer.
@@ -1638,7 +1651,7 @@ static bool getMatmulOPUVectorSizes(mlir::FunctionOpInterface entryPointFn,
     }
   }
 
-  sizes.assign({m0, n0, 1});
+  sizes.assign({m0, n0, k0});
   return true;
 }
 
@@ -1867,6 +1880,15 @@ getMatmulVectorSizes(mlir::FunctionOpInterface entryPointFn,
         lhsElemType.isSignlessInteger(8) &&
         rhsElemType.isSignlessInteger(8) &&
         outElemType.isSignlessInteger(32);
+    bool preserveOPUMDimFp8 =
+        targetAttr && isRISCV(targetAttr.getConfiguration()) &&
+        hasFeature(targetAttr.getConfiguration(), "+xopu") &&
+        isa<FloatType>(lhsElemType) &&
+        cast<FloatType>(lhsElemType).getWidth() == 8 &&
+        isa<FloatType>(rhsElemType) &&
+        cast<FloatType>(rhsElemType).getWidth() == 8 &&
+        isa<FloatType>(outElemType) &&
+        outElemType.getIntOrFloatBitWidth() >= 16;
 
     for (int i = 0; i < (numLoops - 2); ++i) {
       int64_t dimSize = staticShape[i];
@@ -1879,7 +1901,7 @@ getMatmulVectorSizes(mlir::FunctionOpInterface entryPointFn,
       // kernel still matches after tiling selection.
       // For plain matmul, numLoops-3 is M.
       // For batch matmul, numLoops-3 is still the M dimension (not batch).
-      if (preserveOPUMDim && i == (numLoops - 3)) {
+      if ((preserveOPUMDim || preserveOPUMDimFp8) && i == (numLoops - 3)) {
         continue;
       }
 

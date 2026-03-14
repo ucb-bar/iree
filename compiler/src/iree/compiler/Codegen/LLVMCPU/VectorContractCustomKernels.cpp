@@ -266,6 +266,29 @@ struct MMTKernel {
   }
 };
 
+static int64_t getRISCVVVlenFromCPUFeatures(DictionaryAttr config) {
+  if (hasFeature(config, "+zvl65536b")) {
+    return 65536;
+  } else if (hasFeature(config, "+zvl32768b")) {
+    return 32768;
+  } else if (hasFeature(config, "+zvl16384b")) {
+    return 16384;
+  } else if (hasFeature(config, "+zvl8192b")) {
+    return 8192;
+  } else if (hasFeature(config, "+zvl4096b")) {
+    return 4096;
+  } else if (hasFeature(config, "+zvl2048b")) {
+    return 2048;
+  } else if (hasFeature(config, "+zvl1024b")) {
+    return 1024;
+  } else if (hasFeature(config, "+zvl512b")) {
+    return 512;
+  } else if (hasFeature(config, "+zvl256b")) {
+    return 256;
+  }
+  return 128;
+}
+
 // i8*i8->i32 kernel for Aarch64 NEON.
 //
 // Historically certain such kernels [1] required int8 inputs not have the
@@ -715,45 +738,25 @@ MMTKernel MMTKernel_SpacemiT_FP8() {
   return kernel;
 }
 
-// Standard RVV i8*i8->i32 widening kernel.
-//
-// Primary shape: MxNxK = 8x16x1.
-MMTKernel MMTKernel_RVV_8x16x1_Int8() {
+MMTKernel MMTKernel_RVV_i8i8i32(int64_t m0, int64_t n0) {
   MMTKernel kernel;
   kernel.lhsType = MMTKernel::ScalarType::I8;
   kernel.rhsType = MMTKernel::ScalarType::I8;
   kernel.accType = MMTKernel::ScalarType::I32;
-  kernel.m0 = 8;
-  kernel.n0 = 16;
+  assert(m0 > 0 && n0 > 0);
+  assert(m0 <= 127 && n0 <= 127 &&
+         "MMTKernel shape fields are int8_t; widen them if targeting very large VLEN");
+  kernel.m0 = static_cast<int8_t>(m0);
+  kernel.n0 = static_cast<int8_t>(n0);
   kernel.k0 = 1;
-  kernel.lhsRegSize = 8;
-  kernel.rhsRegSize = 16;
-  kernel.accRegSize = 16;
+  kernel.lhsRegSize = static_cast<int8_t>(m0);
+  kernel.rhsRegSize = static_cast<int8_t>(n0);
+  kernel.accRegSize = static_cast<int8_t>(n0);
   kernel.lhsRegs = 1;
   kernel.rhsRegs = 1;
-  kernel.accRegs = 8;
+  kernel.accRegs = static_cast<int8_t>(m0);
   kernel.asmImpl = nullptr;
-  return kernel;
-}
-
-// Standard RVV i8*i8->i32 widening kernel.
-//
-// Secondary shape: MxNxK = 7x16x1.
-MMTKernel MMTKernel_RVV_7x16x1_Int8() {
-  MMTKernel kernel;
-  kernel.lhsType = MMTKernel::ScalarType::I8;
-  kernel.rhsType = MMTKernel::ScalarType::I8;
-  kernel.accType = MMTKernel::ScalarType::I32;
-  kernel.m0 = 7;
-  kernel.n0 = 16;
-  kernel.k0 = 1;
-  kernel.lhsRegSize = 7;
-  kernel.rhsRegSize = 16;
-  kernel.accRegSize = 16;
-  kernel.lhsRegs = 1;
-  kernel.rhsRegs = 1;
-  kernel.accRegs = 7;
-  kernel.asmImpl = nullptr;
+  kernel.asmClobbers = nullptr;
   return kernel;
 }
 
@@ -866,17 +869,18 @@ private:
   const MMTKernel kernel;
   const IREE::HAL::ExecutableTargetAttr target;
 
-    // Returns LLVM "vscale" for the current target.
-  // For RVV, vscale == VLEN / 64. We derive VLEN from IREE's native_vector_size
-  // (bytes). If not present, assume VLEN=128b => vscale=2.
+  // Returns LLVM "vscale" for the current target.
+  // On RVV, vscale == VLEN / 64.
   int64_t getRISCVVScale() const {
-    if (!target) return 2;
-    std::optional<int64_t> nativeBytes =
-        getConfigNativeVectorSize(target.getConfiguration());
-    int64_t bytes = nativeBytes.value_or(16);  // default 128b
-    int64_t vlenBits = bytes * 8;
-    int64_t vscale = vlenBits / 64;
-    return std::max<int64_t>(1, vscale);
+    if (!target) {
+      return 2;
+    }
+    DictionaryAttr config = target.getConfiguration();
+    if (!isRISCV(config) || !hasFeature(config, "+v")) {
+      return 2;
+    }
+    int64_t vlenBits = getRISCVVVlenFromCPUFeatures(config);
+    return std::max<int64_t>(1, vlenBits / 64);
   }
 
   bool isSpacemiT(IREE::HAL::ExecutableTargetAttr target) {
@@ -1050,24 +1054,33 @@ private:
     Type accElemType = getElementTypeOrSelf(acc[0].getType());
     bool isFloat = isa<FloatType>(accElemType);
     
+    const int64_t vscale = getRISCVVScale();
+    assert((kernel.lhsRegSize % vscale) == 0 &&
+           "SpacemiT input tile size must be divisible by vscale");
+    assert((kernel.accRegSize % vscale) == 0 &&
+           "SpacemiT accumulator tile size must be divisible by vscale");
+    int64_t scalableInputCount = kernel.lhsRegSize / vscale;
+    int64_t scalableAccCount = kernel.accRegSize / vscale;
+
     VectorType scalableInputType;
     VectorType scalableAccType;
     StringRef intrName;
     int vlVal;
 
-    // VLEN=256 Logic
     if (isFloat) {
-        // --- FP8/FP16 Path ---
-        scalableAccType = VectorType::get({4}, rewriter.getF16Type(), {true});
-        intrName = "llvm.riscv.smt.vfmadot";
-        scalableInputType = VectorType::get({8}, rewriter.getIntegerType(8), {true});
-        vlVal = 16;
+      scalableAccType =
+          VectorType::get({scalableAccCount}, rewriter.getF16Type(), {true});
+      intrName = "llvm.riscv.smt.vfmadot";
+      scalableInputType =
+          VectorType::get({scalableInputCount}, rewriter.getIntegerType(8), {true});
+      vlVal = kernel.accRegSize;
     } else {
-        // --- Integer Path ---
-        scalableAccType = VectorType::get({4}, rewriter.getIntegerType(32), {true});
-        intrName = "llvm.riscv.smt.vmadot";
-        scalableInputType = VectorType::get({8}, rewriter.getIntegerType(8), {true});
-        vlVal = 16;  
+      scalableAccType =
+          VectorType::get({scalableAccCount}, rewriter.getIntegerType(32), {true});
+      intrName = "llvm.riscv.smt.vmadot";
+      scalableInputType =
+          VectorType::get({scalableInputCount}, rewriter.getIntegerType(8), {true});
+      vlVal = kernel.accRegSize;
     }
 
     // 2. Prepare Inputs (Bitcast F8 -> I8 if needed for the intrinsic)
@@ -1119,10 +1132,11 @@ private:
                                                    ArrayRef<Value> rhs,
                                                    ArrayRef<Value> acc) {
     // Fixed-length vectors are represented as scalable vectors for RVV
-    // intrinsics. On X60 (VLEN=256), vscale is 4, so scalable count = N/4.
-    assert(kernel.n0 % 4 == 0 &&
-           "Expected N to be divisible by 4 on VLEN=256 target");
-    int64_t scalableCount = kernel.n0 / 4;
+    // intrinsics: fixed_count = scalable_count * vscale.
+    const int64_t vscale = getRISCVVScale();
+    assert((kernel.n0 % vscale) == 0 &&
+           "RVV kernel N tile size must be divisible by vscale");
+    int64_t scalableCount = kernel.n0 / vscale;
     VectorType scalableI8 = VectorType::get({scalableCount},
                                             rewriter.getIntegerType(8),
                                             {true});
@@ -1593,10 +1607,16 @@ void populateVectorContractCustomKernelsPatterns(
       patterns.add<MMTCustomKernelPattern>(context, MMTKernel_SpacemiT_Int8());
       patterns.add<MMTCustomKernelPattern>(context, MMTKernel_SpacemiT_FP8());
     } else if (hasFeature(targetConfig, "+v")) {
+      int64_t vlen = getRISCVVVlenFromCPUFeatures(targetConfig);
+      int64_t n0 = std::max<int64_t>(1, vlen / 16);
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(8, n0));
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(7, n0));
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(4, n0));
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(2, n0));
+      patterns.add<MMTCustomKernelPattern>(context, MMTKernel_RVV_i8i8i32(1, n0));
+      // Matvec-style widened N used by KernelDispatch for M=1 specialization.
       patterns.add<MMTCustomKernelPattern>(context,
-                                          MMTKernel_RVV_8x16x1_Int8());
-      patterns.add<MMTCustomKernelPattern>(context,
-                                          MMTKernel_RVV_7x16x1_Int8());
+                                           MMTKernel_RVV_i8i8i32(1, 2 * n0));
     }
   }
   if (isAArch64(targetConfig)) {
