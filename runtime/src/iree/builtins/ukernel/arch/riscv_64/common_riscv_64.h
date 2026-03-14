@@ -38,4 +38,14 @@ static inline bool iree_uk_cpu_riscv_64_zvfh(const iree_uk_uint64_t* cpu_data) {
   return iree_uk_all_bits_set(cpu_data[0], IREE_CPU_DATA0_RISCV_64_ZVFH);
 }
 
+static inline bool iree_uk_cpu_riscv_64_xsmtvdot(
+    const iree_uk_uint64_t* cpu_data) {
+  return iree_uk_all_bits_set(cpu_data[0], IREE_CPU_DATA0_RISCV_64_XSMTVDOT);
+}
+
+static inline bool iree_uk_cpu_riscv_64_xopu(
+    const iree_uk_uint64_t* cpu_data) {
+  return iree_uk_all_bits_set(cpu_data[0], IREE_CPU_DATA0_RISCV_64_XOPU);
+}
+
 #endif  // IREE_BUILTINS_UKERNEL_ARCH_RISCV_64_COMMON_RISCV_64_H_

@@ -19,6 +19,25 @@ iree_uk_query_matmul_tile_sizes_riscv_64_f32f32f32(
   return (iree_uk_matmul_tile_sizes_t){.M = 8, .K = 1, .N = 8};
 }
 
+static iree_uk_matmul_tile_sizes_t
+iree_uk_query_matmul_tile_sizes_riscv_64_i8i8i32(
+    const iree_uk_query_tile_sizes_2d_params_t* params) {
+#if defined(IREE_UK_BUILD_RISCV_64_V)
+  // Keep vendor-feature checks before generic RVV.
+  if (iree_uk_cpu_riscv_64_xsmtvdot(params->cpu_data)) {
+    return (iree_uk_matmul_tile_sizes_t){.M = 4, .K = 8, .N = 4};
+  }
+  if (iree_uk_cpu_riscv_64_xopu(params->cpu_data)) {
+    return (iree_uk_matmul_tile_sizes_t){.M = 16, .K = 128, .N = 16};
+  }
+  if (iree_uk_cpu_riscv_64_v(params->cpu_data)) {
+    return (iree_uk_matmul_tile_sizes_t){.M = 8, .K = 1, .N = 16};
+  }
+#endif
+  // generic fallback
+  return (iree_uk_matmul_tile_sizes_t){.M = 8, .K = 4, .N = 8};
+}
+
 bool iree_uk_query_matmul_tile_sizes_arch(
     const iree_uk_query_tile_sizes_2d_params_t* params,
     iree_uk_matmul_tile_sizes_t* out_matmul_tile_sizes) {
@@ -26,6 +45,10 @@ bool iree_uk_query_matmul_tile_sizes_arch(
   if (op == IREE_UK_FLAG_QUERY_TILE_SIZES_OPERATION_MATMUL_F32F32F32) {
     *out_matmul_tile_sizes =
         iree_uk_query_matmul_tile_sizes_riscv_64_f32f32f32(params);
+    return true;
+  } else if (op == IREE_UK_FLAG_QUERY_TILE_SIZES_OPERATION_MATMUL_I8I8I32) {
+    *out_matmul_tile_sizes =
+        iree_uk_query_matmul_tile_sizes_riscv_64_i8i8i32(params);
     return true;
   } else {
     // Shouldn't happen, validated earlier.

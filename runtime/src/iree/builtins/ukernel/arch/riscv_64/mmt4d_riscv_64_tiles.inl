@@ -13,6 +13,29 @@ IREE_UK_MMT4D_TILE(riscv_64, f32, f32, f32, 2, 1, _v)
 IREE_UK_MMT4D_TILE(riscv_64, f32, f32, f32, 4, 1, _v)
 IREE_UK_MMT4D_TILE(riscv_64, f32, f32, f32, 7, 1, _v)
 
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 1, 1, _v)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 2, 1, _v)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 4, 1, _v)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 7, 1, _v)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 8, 1, _v)
+
+// SpacemiT xsmtvdot uses 4x4x8-like blocking.
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 1, 8, _xsmtvdot)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 2, 8, _xsmtvdot)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 4, 8, _xsmtvdot)
+
+// Saturn OPU: keep K0=1 fallback and prefer high-K K0=128 kernels.
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 1, 1, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 2, 1, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 4, 1, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 8, 1, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 16, 1, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 1, 128, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 2, 128, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 4, 128, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 8, 128, _xopu)
+IREE_UK_MMT4D_TILE(riscv_64, s8, s8, s32, 16, 128, _xopu)
+
 IREE_UK_MMT4D_TILE(riscv_64, f16, f16, f32, 1, 1, _zvfhmin)
 IREE_UK_MMT4D_TILE(riscv_64, f16, f16, f32, 2, 1, _zvfhmin)
 IREE_UK_MMT4D_TILE(riscv_64, f16, f16, f32, 4, 1, _zvfhmin)

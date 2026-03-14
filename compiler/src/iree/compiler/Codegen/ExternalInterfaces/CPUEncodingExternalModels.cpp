@@ -463,6 +463,36 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
     }
   }
 
+  auto isFp8Type = [](Type type) -> bool {
+    auto floatType = dyn_cast<FloatType>(type);
+    return floatType && floatType.getWidth() == 8;
+  };
+
+  // FP8 paths.
+  if (isFp8Type(lhs) && isFp8Type(rhs) &&
+      isa<FloatType>(out) && out.getIntOrFloatBitWidth() >= 16) {
+    if (hasFeature(config, "+xopu")) {
+      int N0 = std::min<int>(16, vlen / 8);
+      // Keep K modest for now: fp8 OPU lowering is not yet mapped to a native
+      // hardware intrinsic path, and very large K tiles would create oversized
+      // vector contracts that fail legality checks.
+      constexpr int K0 = 8;
+      return {
+          TileMxNxK{N0, N0, K0},
+          TileMxNxK{N0 / 2, N0, K0},
+          TileMxNxK{N0 / 4, N0, K0},
+          TileMxNxK{1, N0, K0},
+      };
+    }
+    if (hasFeature(config, "+xsmtvdot")) {
+      return {
+          TileMxNxK{4, 4, 8},
+          TileMxNxK{2, 4, 8},
+          TileMxNxK{1, 4, 8},
+      };
+    }
+  }
+
   // Integer 8 path.
   if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
       out.isSignlessInteger(32)) {
@@ -472,17 +502,15 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
     // (either via custom kernels or a future ukernel). Otherwise it just
     // influences tile choice.
     if (hasFeature(config, "+xopu")) {
-      int N0 = vlen / 8;  // e8, m1 lanes
-
-      // If OPU HW tile is fixed 16x16, clamp here:
-      // N0 = std::min(N0, 16);
+      // OPU HW tile is fixed to 16x16 with a high K-depth.
+      int N0 = std::min<int>(16, vlen / 8);  // e8, m1 lanes
 
       // Enumerate narrow-M truncations; narrow-N handled via transpose logic.
       return {
-          TileMxNxK{N0, N0, 1},
-          TileMxNxK{N0 / 2, N0, 1},
-          TileMxNxK{N0 / 4, N0, 1},
-          TileMxNxK{1, N0, 1},
+          TileMxNxK{N0, N0, 128},
+          TileMxNxK{N0 / 2, N0, 128},
+          TileMxNxK{N0 / 4, N0, 128},
+          TileMxNxK{1, N0, 128},
       };
     }
     if (hasFeature(config, "+xsmtvdot")) {
