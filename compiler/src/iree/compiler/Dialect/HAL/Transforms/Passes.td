@@ -706,6 +706,29 @@ def DumpExecutableSourcesPass :
   ];
 }
 
+def DumpExecutableAsyncDispatchesPass :
+    Pass<"iree-hal-dump-executable-async-dispatches", "mlir::ModuleOp"> {
+  let summary = "Dumps async scheduler wrappers for HAL executables";
+  let description = [{
+    Dumps one module per hal.executable/variant containing exported async
+    dispatch wrapper functions suitable for an external runtime scheduler.
+
+    Each exported wrapper has ABI:
+      (i32 dispatch_iters, !hal.fence wait_fence, !hal.fence signal_fence) -> ()
+
+    Unlike the executable benchmark dumper, these wrappers do not create or
+    await fences internally; they submit work to the device queue using the
+    caller-provided fences and return immediately.
+  }];
+  let options = [
+    Option<
+      "path", "path",
+      "std::string", "",
+      "Output path for dumped async dispatch wrapper modules"
+    >,
+  ];
+}
+
 def DumpExecutableBenchmarksPass :
     Pass<"iree-hal-dump-executable-benchmarks", "mlir::ModuleOp"> {
   let summary = "Dumps standalone hal.executable benchmarks to the provided path.";

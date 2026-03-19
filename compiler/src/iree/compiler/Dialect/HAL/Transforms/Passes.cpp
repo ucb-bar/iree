@@ -406,6 +406,15 @@ void buildHALTransformPassPipeline(OpPassManager &passManager,
       passManager.addPass(IREE::HAL::createDumpExecutableBenchmarksPass(
           {targetOptions.executableBenchmarksPath}));
     }
+    
+    // Dump standalone hal.executable async wrapper modules.
+    // These wrappers are intended for an external runtime scheduler and
+    // accept wait/signal fences from the caller instead of creating/awaiting
+    // fences internally.
+    if (!targetOptions.executableAsyncDispatchesPath.empty()) {
+      passManager.addPass(IREE::HAL::createDumpExecutableAsyncDispatchesPass(
+          {targetOptions.executableAsyncDispatchesPath}));
+    }
   }
 
   if (hooks.afterPhase) {

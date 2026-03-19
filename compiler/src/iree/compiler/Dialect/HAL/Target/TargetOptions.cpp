@@ -55,6 +55,9 @@ void TargetOptions::bindOptions(OptionsBinder &binder) {
         if (executableConfigurationsPath.empty()) {
           executableConfigurationsPath = path;
         }
+        if (executableAsyncDispatchesPath.empty()) {
+            executableAsyncDispatchesPath = path;
+        }
         if (executableBenchmarksPath.empty()) {
           executableBenchmarksPath = path;
         }
@@ -86,6 +89,13 @@ void TargetOptions::bindOptions(OptionsBinder &binder) {
       llvm::cl::desc("Path to write standalone hal.executable benchmarks into "
                      "(- for stdout)."),
       llvm::cl::cat(halTargetOptionsCategory));
+
+    binder.opt<std::string>(
+        "iree-hal-dump-executable-async-dispatches-to",
+        executableAsyncDispatchesPath,
+        llvm::cl::desc("Path to write standalone async dispatch wrapper modules "
+                    "into (- for stdout)."),
+        llvm::cl::cat(halTargetOptionsCategory));
 
   binder.opt<std::string>("iree-hal-dump-executable-intermediates-to",
                           executableIntermediatesPath,

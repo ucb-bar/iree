@@ -67,6 +67,9 @@ struct TargetOptions {
   // configuration).
   std::string executableConfigurationsPath;
 
+  // A path to write individual executable sources with async dispatches into.
+  std::string executableAsyncDispatchesPath;
+
   // A path to write standalone executable benchmarks into.
   std::string executableBenchmarksPath;
 
