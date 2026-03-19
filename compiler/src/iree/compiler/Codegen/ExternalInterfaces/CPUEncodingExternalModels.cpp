@@ -468,12 +468,13 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
       out.isSignlessInteger(32)) {
     // VLEN-aware tile size selection for widening integer matmul.
     //
-    // Follow the same style as the existing RVV floating-point path:
-    // keep K = 1 and derive N from VLEN. Here, the accumulator type is i32.
-    int N0 = vlen / 16;
+    // Same formula as the f32 path: N0 = VLEN/8, targeting LMUL=4 for i32
+    // accumulators. The widening chain is i8(m1) -> i16(m2) -> i32(m4),
+    // fully utilizing the register capacity at any VLEN.
+    // M0=7 with LMUL=4 accumulators: 7*4 + 2(prod) + 1(rhs) = 31 regs.
+    int N0 = vlen / 8;
     return {
-        TileMxNxK{8, N0, 1}, // Primary shape for RVV widening int8 kernels.
-        TileMxNxK{7, N0, 1}, // Truncation of the above.
+        TileMxNxK{7, N0, 1}, // Primary shape for RVV widening int8 kernels.
         TileMxNxK{4, N0, 1}, // Truncation of the above.
         TileMxNxK{2, N0, 1}, // Truncation of the above.
         TileMxNxK{1, N0, 1}, // Truncation of the above.

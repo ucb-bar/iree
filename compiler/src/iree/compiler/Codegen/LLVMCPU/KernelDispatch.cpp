@@ -1641,7 +1641,7 @@ getMatmulRISCVVectorSizes(mlir::FunctionOpInterface entryPointFn,
     int64_t maxNumberElementsForLMUL4 =
         (nativeVectorSize * 2 * kByteSizeInBits) / kAccumulatorBitWidth;
 
-    sizes.assign({8, maxNumberElementsForLMUL4, 1});
+    sizes.assign({7, maxNumberElementsForLMUL4, 1});
     scalableSizeFlags.assign({false, false, false});
 
     ArrayRef<int64_t> lhsShape = op.getShape(op.getDpsInputOperand(0));
