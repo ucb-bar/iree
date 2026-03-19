@@ -464,6 +464,19 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
       };
     }
   }
+  // Integer 8 path: standard RVV widening multiply-accumulate.
+  if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
+      out.isSignlessInteger(32)) {
+    int elementsPerReg = vlen / 32;
+    int N0 = elementsPerReg * 2;
+    return {
+        TileMxNxK{8, N0, 1},
+        TileMxNxK{7, N0, 1},
+        TileMxNxK{4, N0, 1},
+        TileMxNxK{2, N0, 1},
+        TileMxNxK{1, N0, 1},
+    };
+  }
   // Fallback - no architecture-optimized tile size for this case.
   return {};
 }
