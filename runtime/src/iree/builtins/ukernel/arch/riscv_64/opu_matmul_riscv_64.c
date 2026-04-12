@@ -32,15 +32,13 @@
 // nrows/ncols: how many rows/cols to store (up to 16).
 #define OPU_STORE_SUBTILE_2D(mx, out_row, out_stride, nrows, ncols)            \
   do {                                                                         \
-    asm volatile("vsetvli zero, %0, e32, m4, ta, ma" : : "r"(ncols));         \
     for (int _r = 0; _r < (nrows); ++_r) {                                    \
-      asm volatile(".insn r 0x57, 0x6, 0x5d, x0, %0, " #mx                    \
+      asm volatile("vsetvli zero, %2, e32, m4, ta, ma\n\t"                    \
+                   ".insn r 0x57, 0x6, 0x5d, x0, %0, " #mx "\n\t"            \
+                   "vse32.v v0, (%1)\n\t"                                      \
                    :                                                           \
-                   : "r"(_r)                                                   \
-                   : "memory"); /* VMV_VR: extract row _r from mx → v0 */      \
-      asm volatile("vse32.v v0, (%0)"                                          \
-                   :                                                           \
-                   : "r"((out_row) + _r * (out_stride))                        \
+                   : "r"(_r), "r"((out_row) + _r * (out_stride)),             \
+                     "r"((iree_uk_index_t)(ncols))                             \
                    : "memory");                                                \
     }                                                                          \
   } while (0)
@@ -223,38 +221,44 @@ static void iree_uk_opu_matmul_loop(
               (n_rem > HW) ? ((n_rem - HW < HW) ? n_rem - HW : HW) : 0;
 
           // --- Init 4 accumulators (m0, m1, m2, m3) ---
-          asm volatile("vsetvli zero, %0, e32, m4, ta, ma" : : "r"(n_hw0));
-          asm volatile("vmv.v.i v0, 0" : : : "memory");
-          asm volatile(".insn r 0x57, 0x6, 0x59, x0, x0, x0" : : : "memory");
-          asm volatile(".insn r 0x57, 0x6, 0x59, x1, x0, x0" : : : "memory");
-          asm volatile(".insn r 0x57, 0x6, 0x59, x2, x0, x0" : : : "memory");
-          asm volatile(".insn r 0x57, 0x6, 0x59, x3, x0, x0" : : : "memory");
+          // ALL vsetvli + vector ops fused into single asm blocks.
+          // This file is compiled as LLVM bitcode where RISCVInsertVSETVLI
+          // strips standalone asm volatile vsetvli instructions.
+          asm volatile(
+              "vsetvli zero, %0, e32, m4, ta, ma\n\t"
+              "vmv.v.i v0, 0\n\t"
+              ".insn r 0x57, 0x6, 0x59, x0, x0, x0\n\t"  // OPMVINBCAST m0
+              ".insn r 0x57, 0x6, 0x59, x1, x0, x0\n\t"  // m1
+              ".insn r 0x57, 0x6, 0x59, x2, x0, x0\n\t"  // m2
+              ".insn r 0x57, 0x6, 0x59, x3, x0, x0\n\t"  // m3
+              :
+              : "r"((iree_uk_index_t)n_hw0)
+              : "memory");
 
           if (accumulate) {
             // Load existing 2D output into accumulators.
-            // Row stride is out_stride0 (the full 2D row stride).
             iree_uk_int32_t* sub_out =
                 out_base + (i * M0 + m_sub) * out_stride0 + j * N0 + n_sub;
             for (int r = 0; r < m_hw0; ++r) {
-              asm volatile("vle32.v v0, (%0)"
-                           :
-                           : "r"(sub_out + r * out_stride0)
-                           : "memory");
-              asm volatile(".insn r 0x57, 0x6, 0x55, x0, %0, x0"
-                           :
-                           : "r"(r)
-                           : "memory"); // VMV_RV m0
+              asm volatile(
+                  "vsetvli zero, %2, e32, m4, ta, ma\n\t"
+                  "vle32.v v0, (%0)\n\t"
+                  ".insn r 0x57, 0x6, 0x55, x0, %1, x0\n\t"  // VMV_RV m0
+                  :
+                  : "r"(sub_out + r * out_stride0), "r"(r),
+                    "r"((iree_uk_index_t)n_hw0)
+                  : "memory");
             }
             if (m_hw1 > 0) {
               for (int r = 0; r < m_hw1; ++r) {
-                asm volatile("vle32.v v0, (%0)"
-                             :
-                             : "r"(sub_out + (r + HW) * out_stride0)
-                             : "memory");
-                asm volatile(".insn r 0x57, 0x6, 0x55, x2, %0, x0"
-                             :
-                             : "r"(r)
-                             : "memory"); // VMV_RV m2
+                asm volatile(
+                    "vsetvli zero, %2, e32, m4, ta, ma\n\t"
+                    "vle32.v v0, (%0)\n\t"
+                    ".insn r 0x57, 0x6, 0x55, x2, %1, x0\n\t"  // VMV_RV m2
+                    :
+                    : "r"(sub_out + (r + HW) * out_stride0), "r"(r),
+                      "r"((iree_uk_index_t)n_hw0)
+                    : "memory");
               }
             }
           }
@@ -264,38 +268,100 @@ static void iree_uk_opu_matmul_loop(
           const iree_uk_int8_t* rhs_k0 = rhs_panel + n_sub;
           const iree_uk_int8_t* rhs_k1 = rhs_panel + n_sub + HW;
 
-          asm volatile("vsetvli zero, %0, e8, m1, ta, ma" : : "r"(HW));
+          // Pre-zero v16/v19 for narrow-M/N cases.
+          asm volatile(
+              "vsetvli zero, %0, e8, m1, ta, ma\n\t"
+              "vmv.v.i v16, 0\n\t"
+              "vmv.v.i v19, 0\n\t"
+              :
+              : "r"((iree_uk_index_t)HW)
+              : "memory");
 
-          for (int k = 0; k < K; ++k) {
-            const iree_uk_int8_t* lhs_kk = lhs_k + k * M0 * K0;
-            const iree_uk_int8_t* rhs_kk0 = rhs_k0 + k * N0 * K0;
-            const iree_uk_int8_t* rhs_kk1 = rhs_k1 + k * N0 * K0;
-
-            for (int k0 = 0; k0 < K0; ++k0) {
-              // Load A sub-row, B sub-col, VOPACC
-              asm volatile("vle8.v v16, (%0)\n\t"
-                           "vle8.v v17, (%1)\n\t"
-                           ".insn r 0x57, 0x2, 0x51, x0, x17, x16\n\t"
-                           :
-                           : "r"(lhs_kk + k0 * M0), "r"(rhs_kk0 + k0 * N0)
-                           : "memory");
-              if (n_hw1 > 0) {
-                asm volatile("vle8.v v18, (%0)\n\t"
-                             ".insn r 0x57, 0x2, 0x51, x1, x18, x16\n\t"
+          // Branch: full tiles use original fast asm; narrow tiles use
+          // fused vsetvli+vle blocks to prevent LLVM from stripping vsetvli.
+          if (m_hw0 == HW && n_hw0 == HW) {
+            // --- FAST PATH: full 16×16 sub-tile ---
+            // NOTE: vsetvli MUST be inside the asm block because this file
+            // is compiled as LLVM bitcode (-ffreestanding -O3) and LLVM's
+            // RISCVInsertVSETVLI pass strips standalone asm volatile vsetvli.
+            for (int k = 0; k < K; ++k) {
+              const iree_uk_int8_t* lhs_kk = lhs_k + k * M0 * K0;
+              const iree_uk_int8_t* rhs_kk0 = rhs_k0 + k * N0 * K0;
+              const iree_uk_int8_t* rhs_kk1 = rhs_k1 + k * N0 * K0;
+              for (int k0 = 0; k0 < K0; ++k0) {
+                asm volatile("vsetvli zero, %2, e8, m1, ta, ma\n\t"
+                             "vle8.v v16, (%0)\n\t"
+                             "vle8.v v17, (%1)\n\t"
+                             ".insn r 0x57, 0x2, 0x51, x0, x17, x16\n\t"
                              :
-                             : "r"(rhs_kk1 + k0 * N0)
-                             : "memory");
-              }
-              if (m_hw1 > 0) {
-                asm volatile("vle8.v v19, (%0)\n\t"
-                             ".insn r 0x57, 0x2, 0x51, x2, x17, x19\n\t"
-                             :
-                             : "r"(lhs_kk + k0 * M0 + HW)
+                             : "r"(lhs_kk + k0 * M0), "r"(rhs_kk0 + k0 * N0),
+                               "r"((iree_uk_index_t)HW)
                              : "memory");
                 if (n_hw1 > 0) {
+                  asm volatile("vle8.v v18, (%0)\n\t"
+                               ".insn r 0x57, 0x2, 0x51, x1, x18, x16\n\t"
+                               :
+                               : "r"(rhs_kk1 + k0 * N0)
+                               : "memory");
+                }
+                if (m_hw1 > 0) {
+                  asm volatile("vle8.v v19, (%0)\n\t"
+                               ".insn r 0x57, 0x2, 0x51, x2, x17, x19\n\t"
+                               :
+                               : "r"(lhs_kk + k0 * M0 + HW)
+                               : "memory");
+                  if (n_hw1 > 0) {
+                    asm volatile(
+                        ".insn r 0x57, 0x2, 0x51, x3, x18, x19\n\t" : : :
+                        "memory");
+                  }
+                }
+              }
+            }
+          } else {
+            // --- NARROW PATH: fused vsetvli to prevent LLVM stripping ---
+            for (int k = 0; k < K; ++k) {
+              const iree_uk_int8_t* lhs_kk = lhs_k + k * M0 * K0;
+              const iree_uk_int8_t* rhs_kk0 = rhs_k0 + k * N0 * K0;
+              const iree_uk_int8_t* rhs_kk1 = rhs_k1 + k * N0 * K0;
+              for (int k0 = 0; k0 < K0; ++k0) {
+                asm volatile(
+                    "vsetvli zero, %2, e8, m1, tu, ma\n\t"
+                    "vle8.v v16, (%0)\n\t"
+                    "vsetvli zero, %3, e8, m1, tu, ma\n\t"
+                    "vle8.v v17, (%1)\n\t"
+                    "vsetvli zero, %4, e8, m1, ta, ma\n\t"
+                    ".insn r 0x57, 0x2, 0x51, x0, x17, x16\n\t"
+                    :
+                    : "r"(lhs_kk + k0 * M0), "r"(rhs_kk0 + k0 * N0),
+                      "r"((iree_uk_index_t)m_hw0), "r"((iree_uk_index_t)n_hw0), "r"((iree_uk_index_t)HW)
+                    : "memory");
+                if (n_hw1 > 0) {
                   asm volatile(
-                      ".insn r 0x57, 0x2, 0x51, x3, x18, x19\n\t" : : :
-                      "memory");
+                      "vsetvli zero, %1, e8, m1, tu, ma\n\t"
+                      "vle8.v v18, (%0)\n\t"
+                      "vsetvli zero, %2, e8, m1, ta, ma\n\t"
+                      ".insn r 0x57, 0x2, 0x51, x1, x18, x16\n\t"
+                      :
+                      : "r"(rhs_kk1 + k0 * N0),
+                        "r"((iree_uk_index_t)n_hw1), "r"((iree_uk_index_t)HW)
+                      : "memory");
+                }
+                if (m_hw1 > 0) {
+                  asm volatile(
+                      "vsetvli zero, %1, e8, m1, tu, ma\n\t"
+                      "vle8.v v19, (%0)\n\t"
+                      "vsetvli zero, %2, e8, m1, ta, ma\n\t"
+                      ".insn r 0x57, 0x2, 0x51, x2, x17, x19\n\t"
+                      :
+                      : "r"(lhs_kk + k0 * M0 + HW),
+                        "r"((iree_uk_index_t)m_hw1), "r"((iree_uk_index_t)HW)
+                      : "memory");
+                  if (n_hw1 > 0) {
+                    asm volatile(
+                        ".insn r 0x57, 0x2, 0x51, x3, x18, x19\n\t" : : :
+                        "memory");
+                  }
                 }
               }
             }

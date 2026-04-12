@@ -109,7 +109,9 @@ static bool GenerateHeader(const std::string& identifier,
 }
 
 static bool SlurpFile(const std::string& file_name, std::string* contents) {
-  constexpr std::streamoff kMaxSize = 100000000;
+  // Raised from 100MB to 2GB for bare-metal targets where the entire model
+  // (including weights) must be embedded into the ELF via LOADMEM.
+  constexpr std::streamoff kMaxSize = 2000000000LL;
   std::ifstream f(file_name, std::ios::in | std::ios::binary);
   if (!f) {
     fprintf(stderr, "Failed to open '%s' for read.\n", file_name.c_str());

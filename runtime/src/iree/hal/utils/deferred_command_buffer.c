@@ -720,8 +720,8 @@ static iree_status_t iree_hal_deferred_command_buffer_dispatch(
       sizeof(iree_hal_cmd_dispatch_t), &total_size,
       IREE_STRUCT_FIELD_ALIGNED(constants.data_length, uint8_t,
                                 iree_max_align_t, &constants_offset),
-      IREE_STRUCT_FIELD_ALIGNED(bindings.count, iree_hal_buffer_ref_t, 1,
-                                &bindings_offset)));
+      IREE_STRUCT_FIELD_ALIGNED(bindings.count, iree_hal_buffer_ref_t,
+                                iree_max_align_t, &bindings_offset)));
 
   iree_hal_cmd_dispatch_t* cmd = NULL;
   IREE_RETURN_IF_ERROR(iree_hal_cmd_list_append_command(
@@ -753,6 +753,15 @@ static iree_status_t iree_hal_deferred_command_buffer_apply_dispatch(
     iree_hal_command_buffer_t* target_command_buffer,
     iree_hal_buffer_binding_table_t binding_table,
     const iree_hal_cmd_dispatch_t* cmd) {
+  // Debug: print before each dispatch apply (higher level than issue_call)
+  {
+    static int _ad_count = 0;
+    ++_ad_count;
+    fprintf(stderr, "[apply] #%d ord=%d bindings=%zu\n",
+            _ad_count, (int)cmd->export_ordinal,
+            cmd->bindings.count);
+    fflush(stderr);
+  }
   iree_hal_dispatch_config_t config = cmd->config;
   IREE_RETURN_IF_ERROR(iree_hal_buffer_binding_table_resolve_ref(
       binding_table, cmd->config.workgroup_count_ref,

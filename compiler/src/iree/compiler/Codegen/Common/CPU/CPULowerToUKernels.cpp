@@ -752,6 +752,26 @@ struct FusedOPUMatmulQDQPattern : OpRewritePattern<linalg::GenericOp> {
     Value M = otherOps[0], N = otherOps[1], K = otherOps[2];
     Value M0 = otherOps[3], N0 = otherOps[4], K0 = otherOps[5];
 
+    // Skip narrow-M/N (vecmat) cases. The fused QDQ ukernel was designed for
+    // 16×16 OPU tiles and has wrong codegen for M0<16 (vecmat tile {1,16,1}).
+    // Narrow-M falls back to basic mmt4d + separate dequant generic.
+    // M0 is at packed LHS dim 2, N0 is at packed RHS dim 2.
+    // Packed LHS shape: [M, K, M0, K0], Packed RHS shape: [N, K, N0, K0]
+    if (auto lhsTensorType = dyn_cast<RankedTensorType>(lhs.getType())) {
+      if (lhsTensorType.getRank() >= 3 &&
+          !lhsTensorType.isDynamicDim(2) &&
+          lhsTensorType.getDimSize(2) < 16) {
+        return failure();
+      }
+    }
+    if (auto rhsTensorType = dyn_cast<RankedTensorType>(rhs.getType())) {
+      if (rhsTensorType.getRank() >= 3 &&
+          !rhsTensorType.isDynamicDim(2) &&
+          rhsTensorType.getDimSize(2) < 16) {
+        return failure();
+      }
+    }
+
     Location loc = genericOp.getLoc();
     Value genericOut = genericOp.getDpsInitOperand(0)->get();
     auto outType = cast<ShapedType>(genericOut.getType());

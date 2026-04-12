@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "iree/hal/api.h"
 #include "iree/hal/local/elf/elf_module.h"
@@ -187,6 +188,16 @@ static iree_status_t iree_hal_elf_executable_issue_call(
     const iree_hal_executable_dispatch_state_v0_t* dispatch_state,
     const iree_hal_executable_workgroup_state_v0_t* workgroup_state,
     uint32_t worker_id) {
+  // Heartbeat: print EVERY call so we can identify which dispatch is stuck.
+  {
+    static int _hb_count = 0;
+    ++_hb_count;
+    fprintf(stderr, "[d] #%d o=%zu wg=%u\n",
+            _hb_count, ordinal,
+            dispatch_state->workgroup_count_x);
+    fflush(stderr);
+  }
+
   iree_hal_elf_executable_t* executable =
       (iree_hal_elf_executable_t*)base_executable;
   const iree_hal_executable_library_v0_t* library = executable->library.v0;

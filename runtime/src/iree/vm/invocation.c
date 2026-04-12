@@ -323,6 +323,13 @@ IREE_API_EXPORT iree_status_t iree_vm_invoke(
     iree_vm_invocation_flags_t flags, const iree_vm_invocation_policy_t* policy,
     const iree_vm_list_t* inputs, iree_vm_list_t* outputs,
     iree_allocator_t host_allocator) {
+  // Debug: confirm we entered iree_vm_invoke
+  {
+    static int _inv_count = 0;
+    ++_inv_count;
+    fprintf(stderr, "[vm_invoke] #%d entering\n", _inv_count);
+    fflush(stderr);
+  }
   IREE_TRACE_ZONE_BEGIN(z0);
 
   // Bound the synchronous invocation to the timeout specified by the user
