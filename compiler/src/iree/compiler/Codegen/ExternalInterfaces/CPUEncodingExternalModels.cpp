@@ -514,10 +514,12 @@ enumerateMatmulTileRiscv64(TypeRange elementTypes, DictionaryAttr config) {
   if (lhs.isSignlessInteger(8) && rhs.isSignlessInteger(8) &&
       out.isSignlessInteger(32)) {
 
-    // Saturn OPU: 16×16 hardware tiles. Limit encoding tiles to 16×16 max
-    // to avoid oversized vectors during vectorization on V128.
-    // The OPU ukernel internally handles larger effective tiles (32×32, 64×64)
-    // via 2×2/4×4 sub-tiling at runtime.
+    // Saturn OPU: 16×16 hardware tiles. Tested 2026-05-28 (Lane B):
+    // larger 32×32 / 32×16 encoding tiles trip an MLIR vector-size
+    // cap (8192-byte vector ops), even though the OPU ukernel itself
+    // handles 32×32 via 2×2 sub-tiling at runtime. 16×32 (wider N
+    // only) also fails on im2col paths under the OPU encoding
+    // resolver. Keeping the conservative 16×16 menu.
     if (hasFeature(config, "+xopu")) {
       int N0 = std::min<int>(16, vlen / 8);  // e8, m1 lanes = 16 on V128
       return {
